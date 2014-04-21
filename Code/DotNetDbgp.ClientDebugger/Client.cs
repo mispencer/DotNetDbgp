@@ -47,8 +47,7 @@ namespace DotNetDbgp.ClientDebugger {
 				_socket.Send(Encoding.UTF8.GetBytes(this.GenerateOutputMessage(this.InitXml(sourcePosition != null ? sourcePosition.Path : null))));
 
 				Console.CancelKeyPress += delegate {
-					_mdbgProcess.AsyncStop().WaitOne();
-					this.Stop();
+					this.Detach();
 					System.Environment.Exit(-1);
 				};
 
@@ -63,11 +62,8 @@ namespace DotNetDbgp.ClientDebugger {
 
 					while(messageBuffer.Contains("\0")) {
 						var message = messageBuffer.Substring(0, messageBuffer.IndexOf('\0'));
-						Console.WriteLine("Message: "+message);
+						//Console.WriteLine("Message: "+message);
 
-						//Thread.Sleep(5000);
-						//Console.WriteLine("Ok");
-				
 						messageBuffer = messageBuffer.Substring(message.Length+1);
 						var parsedMessage = this.ParseInputMessage(message);
 
@@ -85,7 +81,7 @@ namespace DotNetDbgp.ClientDebugger {
 						String outputMessage = null;
 						switch(command) {
 							case "detach":
-								this.Stop();
+								this.Detach();
 								return;
 							case "context_names":
 								outputMessage = this.ContextNamesXml(transId);
@@ -161,19 +157,21 @@ namespace DotNetDbgp.ClientDebugger {
 						_socket.Send(Encoding.UTF8.GetBytes(realMessage));
 					}
 				}
-			} finally {
-				if (_mdbgProcess.IsAlive) {
-					_mdbgProcess.Breakpoints.DeleteAll();
-					_mdbgProcess.Detach().WaitOne();
+				this.Detach();
+			} catch (Exception) {
+				try {
+					this.Detach();
+				} catch (Exception e2) {
+					Console.Error.WriteLine(e2.ToString());
 				}
-				_socket.Close();
+				throw;
 			}
 		}
 
 		private String GenerateOutputMessage(String message) {
 			var length = message.Length;
 			var result = String.Format("{0}\0{1}\0", length.ToString(), message);
-			Console.WriteLine(result);
+			//Console.WriteLine(result);
 			return result;
 		}
 
@@ -245,15 +243,6 @@ namespace DotNetDbgp.ClientDebugger {
 				}
 				file = file.Replace('/', '\\');
 				var breakpoint = _mdbgProcess.Breakpoints.CreateBreakpoint(new BreakpointLineNumberLocation(file, line));
-				//foreach(var appDom in _mdbgProcess.AppDomains.Cast<MDbgAppDomain>()) {
-				//	Console.WriteLine("AppDomain: "+appDom.Number);
-				//	foreach(var assembly in appDom.CorAppDomain.Assemblies.Cast<Microsoft.Samples.Debugging.CorDebug.CorAssembly>()) {
-				//		Console.WriteLine("Assembly: "+assembly.Name);
-				//	}
-				//}
-				//foreach (var module in _mdbgProcess.Modules.Cast<MDbgModule>()) {
-				//	Console.WriteLine(module.Number);
-				//}
 				Console.WriteLine(String.Format("\nFile: {0}, Line: {1}, Breakpoint: {2}\n", file, line, breakpoint.ToString()));
 				return String.Format(
 					 "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
@@ -270,16 +259,6 @@ namespace DotNetDbgp.ClientDebugger {
 				if (breakpoint != null) {
 					breakpoint.Delete();
 				}
-				//var breakpoint = _mdbgProcess.Breakpoints.CreateBreakpoint(new BreakpointLineNumberLocation(file, line));
-				//foreach(var appDom in _mdbgProcess.AppDomains.Cast<MDbgAppDomain>()) {
-				//	Console.WriteLine("AppDomain: "+appDom.Number);
-				//	foreach(var assembly in appDom.CorAppDomain.Assemblies.Cast<Microsoft.Samples.Debugging.CorDebug.CorAssembly>()) {
-				//		Console.WriteLine("Assembly: "+assembly.Name);
-				//	}
-				//}
-				//foreach (var module in _mdbgProcess.Modules.Cast<MDbgModule>()) {
-				//	Console.WriteLine(module.Number);
-				//}
 				//Console.WriteLine(String.Format("File: {0}, Line: {1}, Breakpoint: {2}", file, line, breakpoint.ToString()));
 				return String.Format(
 					 "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
@@ -418,12 +397,16 @@ namespace DotNetDbgp.ClientDebugger {
 			return new System.Xml.Linq.XText(input).ToString();
 		}
 
-		public void Stop() {
-			if (_mdbgProcess.IsAlive) {
+		public void Detach() {
+			try {
+				if (_mdbgProcess.IsAlive && _mdbgProcess.IsRunning) {
+					_mdbgProcess.AsyncStop().WaitOne();
+				}
 				_mdbgProcess.Breakpoints.DeleteAll();
+			} finally {
 				_mdbgProcess.Detach().WaitOne();
+				_socket.Close();
 			}
-			_socket.Close();
 		}
 	}
 }
