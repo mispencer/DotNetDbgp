@@ -1,0 +1,14 @@
+*.asax	text=auto
+*.config	text=auto
+*.cs	text=auto
+*.cshtml	text=auto
+*.csproj	text=auto,eol=crlf
+*.css	text=auto
+*.exe	-text
+*.gif	-text
+*.jpg	-text
+*.js	-text
+*.png	-text
+*.resx	-text
+*.sln	text=auto,eol=crlf
+*.xml	text=auto
