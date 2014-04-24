@@ -136,7 +136,8 @@ namespace DotNetDbgp.ClientDebugger {
 								outputMessage = this.ContinuationXml(parsedMessage.Item1, transId);
 								return;
 							case "stack_get": {
-									var depth = int.Parse(getParamOrDefault("c", "0"));
+									var depthStr = getParamOrDefault("c", "0");
+									var depth = String.IsNullOrWhiteSpace(depthStr) ? (int?)null : (int?)int.Parse(depthStr);
 									outputMessage = this.StackGetXml(transId, depth);
 								}
 								break;
@@ -220,24 +221,30 @@ namespace DotNetDbgp.ClientDebugger {
 			);
 		}
 
-		private String StackGetXml(String transId, int depth) {
+		private String StackGetXml(String transId, int? depth) {
 			var activeThread = _mdbgProcess.Threads.HaveActive ? _mdbgProcess.Threads.Active : null;
 
-			var sourcePosition = activeThread == null ? null : activeThread.Frames.Cast<MDbgFrame>().ElementAt(depth).SourcePosition;
-
-			if (sourcePosition == null && activeThread != null && activeThread.CurrentSourcePosition != null) {
-				sourcePosition = activeThread.CurrentSourcePosition;
+			var framesString = String.Empty;
+			var currentDepth = depth == null ? 0 : depth.Value;
+			var sourcePositions = activeThread != null ? ( /* depth == null ? */ activeThread.Frames.Cast<MDbgFrame>() /* : activeThread.Frames.Cast<MDbgFrame>().Skip(depth.Value-1).Take(1) */).Select(i => i.SourcePosition)
+			                    : new MDbgSourcePosition[] { null };
+			foreach(var sourcePosition in sourcePositions) {
+				framesString += String.Format(
+					"<stack level=\"{0}\" type=\"file\" filename=\"{1}\" lineno=\"{2}\" where=\"\" cmdbegin=\"\" cmdend=\"\"/>",
+					currentDepth,
+					(sourcePosition == null ? null : sourcePosition.Path) ?? "dbgp:null",
+					(sourcePosition == null ? null : sourcePosition.Line.ToString()) ?? ""
+				);
+				currentDepth++;
 			}
 			
 			return String.Format(
 				 "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
 				+"<response xmlns=\"urn:debugger_protocol_v1\" command=\"stack_get\" transaction_id=\"{0}\">"
-				+"	<stack level=\"{3}\" type=\"file\" filename=\"{1}\" lineno=\"{2}\" where=\"\" cmdbegin=\"\" cmdend=\"\"/>"
+				+"	{1}"
 				+"</response>",
 				transId,
-				(sourcePosition == null ? null : sourcePosition.Path) ?? "dbgp:null",
-				(sourcePosition == null ? null : sourcePosition.Line.ToString()) ?? "",
-				depth
+				framesString
 			);
 		}
 
