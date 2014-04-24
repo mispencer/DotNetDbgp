@@ -1,0 +1,5 @@
+A bridge between Mdbg and Dbgp (i.e. the Microsoft .NET debugger).
+
+Implements a debugging engine for Dbpg for .NET languages, backed by Mdgp.
+
+Must have the Mdbg sample (for .NET v4) installed. Reference paths for its DLLs will have to altered in the CSProj.
