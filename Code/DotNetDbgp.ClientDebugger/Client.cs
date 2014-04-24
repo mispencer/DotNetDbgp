@@ -10,6 +10,7 @@ using Microsoft.Samples.Debugging.MdbgEngine;
 
 namespace DotNetDbgp.ClientDebugger {
 	public class Client {
+		private const bool SHOW_MESSAGES = false;
 		private readonly int _pid;
 
 		private Socket _socket;
@@ -62,7 +63,9 @@ namespace DotNetDbgp.ClientDebugger {
 
 					while(messageBuffer.Contains("\0")) {
 						var message = messageBuffer.Substring(0, messageBuffer.IndexOf('\0'));
-						//Console.WriteLine("Message: "+message);
+#pragma warning disable 162
+						if (SHOW_MESSAGES) { Console.WriteLine("Message: "+message); }
+#pragma warning restore 162
 
 						messageBuffer = messageBuffer.Substring(message.Length+1);
 						var parsedMessage = this.ParseInputMessage(message);
@@ -171,7 +174,9 @@ namespace DotNetDbgp.ClientDebugger {
 		private String GenerateOutputMessage(String message) {
 			var length = message.Length;
 			var result = String.Format("{0}\0{1}\0", length.ToString(), message);
-			//Console.WriteLine(result);
+#pragma warning disable 162
+			if (SHOW_MESSAGES) { Console.WriteLine(result); }
+#pragma warning restore 162
 			return result;
 		}
 
