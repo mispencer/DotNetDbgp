@@ -311,7 +311,7 @@ namespace DotNetDbgp.ClientDebugger {
 
 			var var = _mdbgProcess.ResolveVariable(name, frame);
 
-			var variablesString = this.ContextGetPropertyXml(var, 3);
+			var variablesString = var != null ? this.ContextGetPropertyXml(var, 3, name) : String.Empty;
 
 			return String.Format(
 				 "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
@@ -324,25 +324,31 @@ namespace DotNetDbgp.ClientDebugger {
 			);
 		}
 
-		private String ContextGetPropertyXml(MDbgValue var, int depth) {
-			var childProperties = new List<MDbgValue>();
-			if (var.IsArrayType) {
-				childProperties.AddRange(var.GetArrayItems());
+		private String ContextGetPropertyXml(MDbgValue var, int depth, string fullName = null) {
+			if (fullName == null) {
+				fullName = var.Name;
 			}
-			if (var.IsComplexType) {
-				childProperties.AddRange(var.GetFields());
-			}
+			var childPropertiesCount = 0;
 			var childPropertiesString = new StringBuilder();
 			if (depth > 0) {
-				foreach(var child in childProperties) {
-					childPropertiesString.Append(this.ContextGetPropertyXml(child, depth-1));
+				if (var.IsArrayType) {
+					foreach(var child in var.GetArrayItems()) {
+						childPropertiesString.Append(this.ContextGetPropertyXml(child, depth-1, fullName+"["+child.Name+"]"));
+						childPropertiesCount++;
+					}
+				}
+				if (var.IsComplexType) {
+					foreach(var child in var.GetFields()) {
+						childPropertiesString.Append(this.ContextGetPropertyXml(child, depth-1, fullName+"."+child.Name));
+						childPropertiesCount++;
+					}
 				}
 			}
 			Func<String,String> e = (String i) => this.EscapeXml(i);
 			var myValue = e(var.GetStringValue(0, false));
 			return String.Format(
-				"<property name=\"{0}\" fullname=\"{0}\" type=\"{1}\" classname=\"\" constant=\"0\" children=\"{2}\" size=\"{3}\" encoding=\"none\" numchildren=\"{2}\">{4}{5}</property>",
-				e(var.Name), e(var.TypeName), childProperties.Count, myValue.Length+childPropertiesString.Length, myValue, childPropertiesString.ToString()
+				"<property name=\"{0}\" fullname=\"{1}\" type=\"{2}\" classname=\"{2}\" constant=\"0\" children=\"{3}\" size=\"{4}\" encoding=\"none\" numchildren=\"{3}\">{5}{6}</property>",
+				e(var.Name), e(fullName), e(var.TypeName), childPropertiesCount, myValue.Length+childPropertiesString.Length, myValue, childPropertiesString.ToString()
 			);
 		}
 
