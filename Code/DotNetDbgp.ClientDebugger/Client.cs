@@ -416,6 +416,9 @@ namespace DotNetDbgp.ClientDebugger {
 		}
 
 		private String ContextGetPropertyXml(MDbgValue val, int depth, string fullName = null) {
+			if (depth < 0) {
+				return String.Empty;
+			}
 			if (fullName == null) {
 				fullName = val.Name;
 			}
