@@ -8,6 +8,8 @@ using System.Net.Sockets;
 using System.Reflection;
 
 using Microsoft.Samples.Debugging.MdbgEngine;
+using Microsoft.Samples.Debugging.CorDebug;
+using Microsoft.Samples.Debugging.CorDebug.NativeApi;
 
 namespace DotNetDbgp.ClientDebugger {
 	public class Client {
@@ -47,7 +49,7 @@ namespace DotNetDbgp.ClientDebugger {
 				Action<IRuntimeModule> processModule = (IRuntimeModule module) => {
 					var managedModule = module as ManagedModule;
 					if (managedModule != null && managedModule.SymReader != null) {
-						if (!managedModule.CorModule.JITCompilerFlags.HasFlag(Microsoft.Samples.Debugging.CorDebug.CorDebugJITCompilerFlags.CORDEBUG_JIT_DISABLE_OPTIMIZATION)) {
+						if (!managedModule.CorModule.JITCompilerFlags.HasFlag(CorDebugJITCompilerFlags.CORDEBUG_JIT_DISABLE_OPTIMIZATION)) {
 							return;
 						}
 
@@ -201,6 +203,11 @@ namespace DotNetDbgp.ClientDebugger {
 								var id = int.Parse(getParamOrDefault("d", "0"));
 								outputMessage = this.BreakpointRemoveXml(transId, id);
 								break;
+							case "eval":
+							case "expr":
+							case "exec":
+								outputMessage = this.EvalXml(parsedMessage.Item1, transId, parsedMessage.Item3);
+								break;
 							default:
 								outputMessage = this.ErrorXml(parsedMessage.Item1, transId, 4, "Test");
 								break;
@@ -231,6 +238,128 @@ namespace DotNetDbgp.ClientDebugger {
 			//HACKHACKHACK
 			mdbgProcess.GetType().GetMethod("EnterRunningState", BindingFlags.NonPublic|BindingFlags.Instance, null, new Type[0], null).Invoke(mdbgProcess, new Object[0]);
 			return mdbgProcess.StopEvent;
+		}
+
+		private String EvalXml(String command, String transId, byte[] data) {
+			var input = System.Text.Encoding.UTF8.GetString(data);
+			var rawArguments = this.ParseEvalMessage(input);
+
+			var evalResult = DoEval(rawArguments);
+
+			var resultStr = evalResult.Item1 ? this.ContextGetPropertyXml(evalResult.Item2, 1, input) : String.Empty;
+
+			return String.Format(
+				 "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+				+"<response xmlns=\"urn:debugger_protocol_v1\" command=\"{0}\" transaction_id=\"{1}\" success=\"{2}\">"
+				+"	{3}"
+				+"</response>",
+				command,
+				transId,
+				evalResult.Item1 ? 1 : 0,
+				resultStr
+			);
+		}
+
+		private CorValue[] ParseEvalArguments(IEnumerable<String> arguments) {
+			return arguments.Select(i => {
+				bool boolVal;
+				int intVal;
+				double doubleVal;
+				if (int.TryParse(i, out intVal)) {
+					return this.MakeVal(intVal, CorElementType.ELEMENT_TYPE_I4);
+				} else if (double.TryParse(i, out doubleVal)) {
+					return this.MakeVal(doubleVal, CorElementType.ELEMENT_TYPE_R8);
+				} else if (bool.TryParse(i, out boolVal)) {
+					return this.MakeVal(boolVal, CorElementType.ELEMENT_TYPE_BOOLEAN);
+				} else if (i[0] == '\"' && i[i.Length-1] == '\"') {
+					return this.MakeStr(i.Substring(1, i.Length - 2));
+				} else if (i[0] == '\'' && i[i.Length-1] == '\'') {
+					return this.MakeVal(i[1], CorElementType.ELEMENT_TYPE_CHAR);
+				} else if (i[0] == '$') {
+					return _mdbgProcess.DebuggerVars[i].CorValue;
+				} else {
+					var variable = _mdbgProcess.ResolveVariable(i, _mdbgProcess.Threads.Active.BottomFrame);
+					//Console.WriteLine(String.Format("Argument: {0}", variable.GetStringValue(0)));
+					if (variable != null) {
+						return variable.CorValue;
+					}
+				}
+				throw new Exception(String.Format("Could not parse value from: {0}", i));
+			})
+			.ToArray();
+		}
+
+		private CorFunction GetFunction(String name) {
+			var function = _mdbgProcess.ResolveFunctionNameFromScope(name);
+			//Console.WriteLine(String.Format("Function: {0}", function));
+			return function == null ? null : function.CorFunction;
+		}
+
+		private Tuple<bool,ManagedValue> DoEval(Tuple<String,IList<String>> rawArguments) {
+			var function = this.GetFunction(rawArguments.Item1);
+			var arguments = rawArguments.Item2;
+			if (function == null) {
+				if(arguments.Count() == 0) {
+					var result = this.ParseEvalArguments(new[] {rawArguments.Item1}).Single();
+					return Tuple.Create(true, new ManagedValue(_mdbgProcess.Threads.Active.Get<ManagedThread>().Runtime, result));
+				} else if (arguments.First() == "=") {
+					var sourceArguments = arguments.Skip(1);
+					var source = this.DoEval(Tuple.Create(sourceArguments.First(), (IList<String>)sourceArguments.Skip(1).ToList())).Item2.CorValue;
+					if (rawArguments.Item1.First() == '$') {
+						var target = _mdbgProcess.DebuggerVars[rawArguments.Item1];
+						target.Value = source;
+					} else {
+						var target = this.ParseEvalArguments(new[] { rawArguments.Item1 }).First();
+						var genericTarget = target as CorGenericValue;
+						if (genericTarget != null) {
+							genericTarget.SetValue(source.CastToGenericValue().GetValue());
+						} else if (target is CorReferenceValue) {
+							var refTarget = target as CorReferenceValue;
+							refTarget.Value = source.CastToReferenceValue().Value;
+						}
+					}
+					return Tuple.Create(true, new ManagedValue(_mdbgProcess.Threads.Active.Get<ManagedThread>().Runtime, source));
+				} else {
+					return Tuple.Create(false, (ManagedValue)null);
+				}
+			} else {
+				var parsedArguments = this.ParseEvalArguments(arguments);
+				var managedThread = _mdbgProcess.Threads.Active.Get<ManagedThread>();
+				try {
+					_mdbgProcess.TemporaryDefaultManagedRuntime.CorProcess.SetAllThreadsDebugState(CorDebugThreadState.THREAD_SUSPEND, managedThread.CorThread);
+					var eval = managedThread.CorThread.CreateEval();
+					eval.CallFunction(function, parsedArguments);
+					while(true) {
+						_mdbgProcess.Go().WaitOne();
+						if (_mdbgProcess.StopReason is EvalExceptionStopReason || _mdbgProcess.StopReason is ProcessExitedStopReason) {
+							return Tuple.Create(false, (ManagedValue)null);
+						}
+						if (_mdbgProcess.StopReason is EvalCompleteStopReason) {
+							break;
+						}
+					}
+					return Tuple.Create(true, new ManagedValue(managedThread.Runtime, eval.Result));
+				} finally {
+					_mdbgProcess.TemporaryDefaultManagedRuntime.CorProcess.SetAllThreadsDebugState(CorDebugThreadState.THREAD_RUN, managedThread.CorThread);
+				}
+			}
+		}
+
+		private CorValue MakeStr(String val) {
+			var managedThread =  _mdbgProcess.Threads.Active.Get<ManagedThread>();
+			var eval = managedThread.CorThread.CreateEval();
+			eval.NewString(val);
+			_mdbgProcess.Go().WaitOne();
+			if (!(_mdbgProcess.StopReason is EvalCompleteStopReason)) throw new Exception();
+			return eval.Result;
+		}
+
+		private CorValue MakeVal(object val, CorElementType type) {
+			var managedThread =  _mdbgProcess.Threads.Active.Get<ManagedThread>();
+			var eval = managedThread.CorThread.CreateEval();
+			var corVal = eval.CreateValue(type, null).CastToGenericValue();
+			corVal.SetValue(val);
+			return corVal;
 		}
 
 		private String GenerateOutputMessage(String message) {
@@ -385,7 +514,6 @@ namespace DotNetDbgp.ClientDebugger {
 			);
 		}
 
-
 		private String PropertyGetXml(string transId, int contextId, string name, int depth) {
 			var frame = depth == 0 ? _mdbgProcess.Threads.Active.CurrentFrame : _mdbgProcess.Threads.Active.Frames.Cast<MDbgFrame>().ElementAt(depth);
 
@@ -436,9 +564,28 @@ namespace DotNetDbgp.ClientDebugger {
 			);
 		}
 
-		private Tuple<String,IDictionary<String,String>,String> ParseInputMessage(String message) {
+		private Tuple<String,IDictionary<String,String>,byte[]> ParseInputMessage(String message) {
+			var arguments = this._ParseInputMessageInner(message, true);
+
+			var parts = arguments.Item2;
 			var resultArguments = new Dictionary<String,String>();
+			for(var j = 0; j + 1 < parts.Count; j += 2) {
+				var key = parts[j];
+				var val = parts[j+1];
+				resultArguments[key] = val;
+			}
+
+			return Tuple.Create(arguments.Item1, (IDictionary<String,String>)resultArguments, arguments.Item3);
+		}
+
+		private Tuple<String,IList<String>> ParseEvalMessage(String message) {
+			var arguments = this._ParseInputMessageInner(message, false);
+			return Tuple.Create(arguments.Item1, arguments.Item2);
+		}
+
+		private Tuple<String,IList<String>,byte[]> _ParseInputMessageInner(String message, bool hasBody) {
 			var commandSplitter = message.IndexOf(" ");
+			if (commandSplitter < 0) commandSplitter = message.Length;
 			var command = message.Substring(0, commandSplitter);
 			//Console.WriteLine("Command: "+command);
 
@@ -446,13 +593,13 @@ namespace DotNetDbgp.ClientDebugger {
 			var escape = false;
 			var part = String.Empty;
 			var parts = new List<String>();
-			var i = commandSplitter + 1;
+			var i = commandSplitter;
 			for(; i < message.Length; i++) {
 				var messageChar = message[i];
 				if (!inQuotes) {
 					if (messageChar == ' ') {
 						if (part.Length != 0) {
-							if (part == "--") {
+							if (part == "--" && hasBody) {
 								i++;
 								break;
 							}
@@ -483,20 +630,16 @@ namespace DotNetDbgp.ClientDebugger {
 				//Console.WriteLine("Part: "+part);
 			}
 
-			var body = message.Substring(i);
+			var bodyStr = message.Substring(i);
+			var body = !String.IsNullOrEmpty(bodyStr) ? Convert.FromBase64String(bodyStr) : new byte[0];
+
 			//Console.WriteLine("Body: "+body);
 
-			for(var j = 0; j + 1 < parts.Count; j += 2) {
-				var key = parts[j];
-				var val = parts[j+1];
-				resultArguments[key] = val;
-			}
-
-			return Tuple.Create(command, (IDictionary<String,String>)resultArguments, body);
+			return Tuple.Create(command, (IList<String>)parts, body);
 		}
 
 		private String EscapeXml(String input) {
-			return new System.Xml.Linq.XText(input).ToString();
+			return new System.Xml.Linq.XText(input == null ? "<null>" : input).ToString().Replace("\"", "&quot;");
 		}
 
 		public void Detach() {
