@@ -106,30 +106,38 @@ namespace DotNetDbgp.ClientDebugger {
 							case "step_over":
 							case "step_out":
 								if (!_mdbgProcess.IsRunning) {
-									WaitHandle wait = null;
-									switch (command) {
-										case "run":
-											wait = _mdbgProcess.Go();
-											break;
-										case "step_into":
-											wait = _mdbgProcess.StepInto(false);
-											break;
-										case "step_over":
-											wait = _mdbgProcess.StepOver(false);
-											break;
-										case "step_out":
-											wait = _mdbgProcess.StepOut();
-											break;
-										default:
-											throw new Exception("Assertion failed");
-									}
-									if (_mdbgProcess.StopReason is StepCompleteStopReason || _mdbgProcess.StopReason is BreakpointHitStopReason) {
-										Console.WriteLine(String.Format("Continuing - invalid stop: {0}", _mdbgProcess.StopReason));
-										wait = _mdbgProcess.Go();
+									var validStop = false;
+									while(!validStop) {
+										WaitHandle wait = null;
+										switch (command) {
+											case "run":
+												wait = _mdbgProcess.Go();
+												break;
+											case "step_into":
+												wait = _mdbgProcess.StepInto(false);
+												break;
+											case "step_over":
+												wait = _mdbgProcess.StepOver(false);
+												break;
+											case "step_out":
+												wait = _mdbgProcess.StepOut();
+												break;
+											default:
+												throw new Exception("Assertion failed");
+										}
 										wait.WaitOne();
-										Console.WriteLine("Continued from invalid stop");
+										validStop = _mdbgProcess.StopReason is BreakpointHitStopReason
+										|| (_mdbgProcess.StopReason is StepCompleteStopReason && _mdbgProcess.Threads.HaveActive && _mdbgProcess.Threads.Active.CurrentSourcePosition != null && _mdbgProcess.Threads.Active.CurrentSourcePosition.Path != null);
+										if (!validStop && !(_mdbgProcess.StopReason is StepCompleteStopReason)) {
+											var errorStop = _mdbgProcess.StopReason as ErrorStopReason;
+											if (errorStop != null) {
+												Console.WriteLine(String.Format("Continuing errored: {0}", errorStop.ExceptionThrown));
+												throw errorStop.ExceptionThrown;
+											} else {
+												Console.WriteLine(String.Format("Continuing - invalid stop: {0}", _mdbgProcess.StopReason));
+											}
+										}
 									}
-									wait.WaitOne();
 								}
 								outputMessage = this.ContinuationXml(parsedMessage.Item1, transId);
 								break;
