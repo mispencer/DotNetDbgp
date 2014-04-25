@@ -227,14 +227,22 @@ namespace DotNetDbgp.ClientDebugger {
 
 			var framesString = String.Empty;
 			var currentDepth = depth == null ? 0 : depth.Value;
-			var sourcePositions = activeThread != null ? ( /* depth == null ? */ activeThread.Frames.Cast<MDbgFrame>() /* : activeThread.Frames.Cast<MDbgFrame>().Skip(depth.Value-1).Take(1) */).Select(i => i.SourcePosition)
-			                    : new SourcePosition[] { null };
-			foreach(var sourcePosition in sourcePositions) {
+			var frames = activeThread != null ? /*depth == null ?*/ activeThread.Frames /*
+			                                                  : activeThread.Frames.Skip(depth.Value-1).Take(1) */
+			           : new MDbgFrame[] { };
+			foreach(var frame in frames) {
+				var path = (frame.SourcePosition == null ? null : frame.SourcePosition.Path);
+				if (path == null) {
+					var preferedFrameData = frame.GetPreferedFrameData();
+					path = String.Format("dbgp:{0}", preferedFrameData is ManagedFrameBase ? frame.Function.FullName ?? "null" : "null");
+				}
+				var line = (frame.SourcePosition == null ? null : frame.SourcePosition.Line.ToString()) ?? "";
+
 				framesString += String.Format(
 					"<stack level=\"{0}\" type=\"file\" filename=\"{1}\" lineno=\"{2}\" where=\"\" cmdbegin=\"\" cmdend=\"\"/>",
 					currentDepth,
-					(sourcePosition == null ? null : sourcePosition.Path) ?? "dbgp:null",
-					(sourcePosition == null ? null : sourcePosition.Line.ToString()) ?? ""
+					this.EscapeXml(path),
+					line
 				);
 				currentDepth++;
 			}
