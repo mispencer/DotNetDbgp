@@ -383,7 +383,7 @@ namespace DotNetDbgp.ClientDebugger {
 
 			var variablesString = new StringBuilder();
 			foreach(var var in variables) {
-				variablesString.Append(this.ContextGetPropertyXml(var, 3));
+				variablesString.Append(this.ContextGetPropertyXml(var, 1));
 			}
 			return String.Format(
 				 "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
@@ -402,7 +402,7 @@ namespace DotNetDbgp.ClientDebugger {
 
 			var var = _mdbgProcess.ResolveVariable(name, frame);
 
-			var variablesString = var != null ? this.ContextGetPropertyXml(var, 3, name) : String.Empty;
+			var variablesString = var != null ? this.ContextGetPropertyXml(var, 1, name) : String.Empty;
 
 			return String.Format(
 				 "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
