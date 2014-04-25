@@ -75,7 +75,7 @@ namespace DotNetDbgp.ClientDebugger {
 					processModule(managedModule);
 				}
 				
-				var sourcePosition = !_mdbgProcess.Threads.HaveActive ? null : _mdbgProcess.Threads.Active.CurrentSourcePosition;
+				var sourcePosition = !_mdbgProcess.Threads.HaveActive || !_mdbgProcess.Threads.Active.HaveCurrentFrame ? null : _mdbgProcess.Threads.Active.CurrentSourcePosition;
 
 				_socket.Send(Encoding.UTF8.GetBytes(this.GenerateOutputMessage(this.InitXml(sourcePosition != null ? sourcePosition.Path : null))));
 
