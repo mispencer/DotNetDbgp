@@ -291,17 +291,25 @@ namespace DotNetDbgp.ClientDebugger {
 			                                                  : activeThread.Frames.Skip(depth.Value-1).Take(1) */
 			           : new MDbgFrame[] { null };
 			foreach(var frame in frames) {
-				var path = (frame == null || frame.SourcePosition == null ? null : frame.SourcePosition.Path);
-				if (path == null) {
-					path = String.Format("dbgp:{0}", (Object)frame ?? "null");
+				var line = String.Empty;
+				var path = String.Empty;
+				var where = String.Empty;
+				if (frame != null) {
+					var source = frame == null ? null : frame.SourcePosition;
+					var preferedFrameData = frame.GetPreferedFrameData();
+					var function = !(preferedFrameData is ManagedFrameBase) ? null : ((ManagedFrameBase)preferedFrameData).Function;
+					where = function != null ? function.FullName : frame.ToString();
+					path = source != null ? source.Path : String.Format("dbgp:{0}", function != null ? function.FullName : (String)null);
+					line = (source == null ? null : source.Line.ToString()) ?? "";
 				}
-				var line = (frame == null || frame.SourcePosition == null ? null : frame.SourcePosition.Line.ToString()) ?? "";
 
 				framesString += String.Format(
-					"<stack level=\"{0}\" type=\"file\" filename=\"{1}\" lineno=\"{2}\" where=\"\" cmdbegin=\"\" cmdend=\"\"/>",
+					"<stack level=\"{0}\" type=\"{3}\" filename=\"{1}\" lineno=\"{2}\" where=\"{4}\" cmdbegin=\"\" cmdend=\"\"/>",
 					currentDepth,
 					this.EscapeXml(path),
-					line
+					line,
+					path.StartsWith("dbgp:") ? "eval" : "file",
+					this.EscapeXml(where)
 				);
 				currentDepth++;
 			}
