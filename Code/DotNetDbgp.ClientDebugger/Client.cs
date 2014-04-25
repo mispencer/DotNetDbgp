@@ -5,6 +5,7 @@ using System.Text;
 using System.Threading;
 using System.Net;
 using System.Net.Sockets;
+using System.Reflection;
 
 using Microsoft.Samples.Debugging.MdbgEngine;
 
@@ -12,6 +13,8 @@ namespace DotNetDbgp.ClientDebugger {
 	public class Client {
 		private const bool SHOW_MESSAGES = false;
 		private readonly int _pid;
+		private readonly Object _mdbgProcessLock = new Object();
+		private bool _detaching = false;
 
 		private Socket _socket;
 		private MDbgProcess _mdbgProcess;
@@ -40,6 +43,50 @@ namespace DotNetDbgp.ClientDebugger {
 				var engine = new MDbgEngine();
 				_mdbgProcess = engine.Attach(_pid, VersionPolicy.GetDefaultAttachVersion(_pid));
 				_mdbgProcess.AsyncStop().WaitOne();
+
+				Action<IRuntimeModule> processModule = (IRuntimeModule module) => {
+					var managedModule = module as ManagedModule;
+					if (managedModule != null && managedModule.SymReader != null) {
+						if (!managedModule.CorModule.JITCompilerFlags.HasFlag(Microsoft.Samples.Debugging.CorDebug.CorDebugJITCompilerFlags.CORDEBUG_JIT_DISABLE_OPTIMIZATION)) {
+							return;
+						}
+
+						var functionTokens = managedModule.Importer.EnumerateAllMethods().Select(i => i.MetadataToken).ToArray();
+						/*
+						foreach(var function in functionTokens.Select(managedModule.GetFunction)) {
+							if (function.SymMethod != null) {
+								try {
+									function.CorFunction.JMCStatus = true;
+									Console.WriteLine("Settings JMC on {0}", function.FullName);
+								} catch (Exception e) {
+									Console.WriteLine("Exception settings JMC on {0}", function.FullName, e);
+								}
+							}
+						}
+						*/
+						managedModule.CorModule.SetJmcStatus(true, functionTokens);
+					}
+				};
+				Action<IRuntime> processRuntime = (IRuntime runtime) => {
+					runtime.ModuleLoaded += (Object sender, RuntimeModuleEventArgs args) => {
+						processModule(args.Module);
+					};
+					foreach(var module in _mdbgProcess.Modules.ToList()) {
+						var managedModule = _mdbgProcess.TemporaryDefaultManagedRuntime.Modules.Lookup(module.FriendlyName);
+						processModule(managedModule);
+					}
+				};
+				foreach(var runtime in _mdbgProcess.Runtimes) {
+					processRuntime(runtime);
+				}
+				_mdbgProcess.Runtimes.RuntimeAdded += (Object sender, RuntimeLoadEventArgs runTimeArgs) => {
+					processRuntime(runTimeArgs.Runtime);
+				};
+
+				foreach(var module in _mdbgProcess.Modules.ToList()) {
+					var managedModule = _mdbgProcess.TemporaryDefaultManagedRuntime.Modules.Lookup(module.FriendlyName);
+					processModule(managedModule);
+				}
 				
 				var sourcePosition = !_mdbgProcess.Threads.HaveActive ? null : _mdbgProcess.Threads.Active.CurrentSourcePosition;
 
@@ -109,32 +156,37 @@ namespace DotNetDbgp.ClientDebugger {
 									var validStop = false;
 									while(!validStop) {
 										WaitHandle wait = null;
-										switch (command) {
-											case "run":
-												wait = _mdbgProcess.Go();
-												break;
-											case "step_into":
-												wait = _mdbgProcess.StepInto(false);
-												break;
-											case "step_over":
-												wait = _mdbgProcess.StepOver(false);
-												break;
-											case "step_out":
-												wait = _mdbgProcess.StepOut();
-												break;
-											default:
-												throw new Exception("Assertion failed");
+										lock(_mdbgProcessLock) {
+											switch (command) {
+												case "run":
+													wait = _mdbgProcess.Go();
+													break;
+												case "step_into":
+													wait = StepImpl(_mdbgProcess, StepperType.In, false);
+													break;
+												case "step_over":
+													wait = StepImpl(_mdbgProcess, StepperType.Over, false);
+													break;
+												case "step_out":
+													wait = StepImpl(_mdbgProcess, StepperType.Out, false);
+													break;
+												default:
+													throw new Exception("Assertion failed");
+											}
 										}
 										wait.WaitOne();
-										validStop = _mdbgProcess.StopReason is BreakpointHitStopReason
-										|| (_mdbgProcess.StopReason is StepCompleteStopReason && _mdbgProcess.Threads.HaveActive && _mdbgProcess.Threads.Active.CurrentSourcePosition != null && _mdbgProcess.Threads.Active.CurrentSourcePosition.Path != null);
-										if (!validStop && !(_mdbgProcess.StopReason is StepCompleteStopReason)) {
-											var errorStop = _mdbgProcess.StopReason as ErrorStopReason;
-											if (errorStop != null) {
-												Console.WriteLine(String.Format("Continuing errored: {0}", errorStop.ExceptionThrown));
-												throw errorStop.ExceptionThrown;
-											} else {
-												Console.WriteLine(String.Format("Continuing - invalid stop: {0}", _mdbgProcess.StopReason));
+										lock(_mdbgProcessLock) {
+											validStop = _mdbgProcess.StopReason is BreakpointHitStopReason
+											|| (_mdbgProcess.StopReason is StepCompleteStopReason && _mdbgProcess.Threads.HaveActive && _mdbgProcess.Threads.Active.CurrentSourcePosition != null && _mdbgProcess.Threads.Active.CurrentSourcePosition.Path != null)
+											|| _detaching;
+											if (!validStop && !(_mdbgProcess.StopReason is StepCompleteStopReason)) {
+												var errorStop = _mdbgProcess.StopReason as ErrorStopReason;
+												if (errorStop != null) {
+													Console.WriteLine(String.Format("Continuing errored: {0}", errorStop.ExceptionThrown));
+													throw errorStop.ExceptionThrown;
+												} else {
+													Console.WriteLine(String.Format("Continuing - invalid stop: {0}", _mdbgProcess.StopReason));
+												}
 											}
 										}
 									}
@@ -171,14 +223,27 @@ namespace DotNetDbgp.ClientDebugger {
 						_socket.Send(Encoding.UTF8.GetBytes(realMessage));
 					}
 				}
-			} catch (Exception) {
+			} catch (Exception e) {
 				try {
 					this.Detach();
 				} catch (Exception e2) {
-					Console.Error.WriteLine(e2.ToString());
+					Console.Error.WriteLine("DETACH FAILURE:\n"+e2.ToString());
 				}
-				throw;
+				Console.Error.WriteLine(e.ToString());
 			}
+		}
+
+		private static WaitHandle StepImpl(MDbgProcess mdbgProcess, StepperType type, bool nativeStepping) {
+			//HACKHACKHACK
+			mdbgProcess.GetType().GetMethod("EnsureCanExecute", BindingFlags.NonPublic|BindingFlags.Instance, null, new[] { typeof(String) }, null).Invoke(mdbgProcess, new Object[] { "stepping" });
+			var frameData = (mdbgProcess.Runtimes.NativeRuntime == null ? mdbgProcess.Threads.Active.BottomFrame.GetPreferedFrameData((IRuntime) mdbgProcess.Runtimes.ManagedRuntime) : mdbgProcess.Threads.Active.BottomFrame.GetPreferedFrameData((IRuntime) mdbgProcess.Runtimes.NativeRuntime));
+			var stepDesc = frameData.CreateStepperDescriptor(type, nativeStepping);
+			var managerStepDesc = stepDesc as ManagedStepperDescriptor;
+			if (managerStepDesc != null) managerStepDesc.IsJustMyCode = true;
+			stepDesc.Step();
+			//HACKHACKHACK
+			mdbgProcess.GetType().GetMethod("EnterRunningState", BindingFlags.NonPublic|BindingFlags.Instance, null, new Type[0], null).Invoke(mdbgProcess, new Object[0]);
+			return mdbgProcess.StopEvent;
 		}
 
 		private String GenerateOutputMessage(String message) {
@@ -438,14 +503,18 @@ namespace DotNetDbgp.ClientDebugger {
 		}
 
 		public void Detach() {
-			try {
-				if (_mdbgProcess.IsAlive && _mdbgProcess.IsRunning) {
-					_mdbgProcess.AsyncStop().WaitOne();
+			lock(_mdbgProcessLock) {
+				_detaching = true;
+				try {
+					if (_mdbgProcess.IsAlive && _mdbgProcess.IsRunning) {
+						_mdbgProcess.AsyncStop().WaitOne();
+					}
+					_mdbgProcess.Breakpoints.DeleteAll();
+				} finally {
+					_mdbgProcess.Detach().WaitOne();
+					_socket.Close();
 				}
-				_mdbgProcess.Breakpoints.DeleteAll();
-			} finally {
-				_mdbgProcess.Detach().WaitOne();
-				_socket.Close();
+				_detaching = false;
 			}
 		}
 	}
