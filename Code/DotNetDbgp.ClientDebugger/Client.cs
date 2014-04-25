@@ -51,20 +51,7 @@ namespace DotNetDbgp.ClientDebugger {
 							return;
 						}
 
-						var functionTokens = managedModule.Importer.EnumerateAllMethods().Select(i => i.MetadataToken).ToArray();
-						/*
-						foreach(var function in functionTokens.Select(managedModule.GetFunction)) {
-							if (function.SymMethod != null) {
-								try {
-									function.CorFunction.JMCStatus = true;
-									Console.WriteLine("Settings JMC on {0}", function.FullName);
-								} catch (Exception e) {
-									Console.WriteLine("Exception settings JMC on {0}", function.FullName, e);
-								}
-							}
-						}
-						*/
-						managedModule.CorModule.SetJmcStatus(true, functionTokens);
+						managedModule.CorModule.SetJmcStatus(true, new int[0]);
 					}
 				};
 				Action<IRuntime> processRuntime = (IRuntime runtime) => {
