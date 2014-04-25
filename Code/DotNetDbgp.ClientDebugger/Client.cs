@@ -293,13 +293,7 @@ namespace DotNetDbgp.ClientDebugger {
 			foreach(var frame in frames) {
 				var path = (frame == null || frame.SourcePosition == null ? null : frame.SourcePosition.Path);
 				if (path == null) {
-					String functionFullName = null;
-					if (frame != null) {
-						var preferedFrameData = frame.GetPreferedFrameData();
-						var function = !(preferedFrameData is ManagedFrameBase) ? null : ((ManagedFrameBase)preferedFrameData).Function;
-						functionFullName = function != null ? function.FullName : null;
-					}
-					path = String.Format("dbgp:{0}", functionFullName ?? "null");
+					path = String.Format("dbgp:{0}", (Object)frame ?? "null");
 				}
 				var line = (frame == null || frame.SourcePosition == null ? null : frame.SourcePosition.Line.ToString()) ?? "";
 
