@@ -269,18 +269,18 @@ namespace DotNetDbgp.ClientDebugger {
 		}
 
 		private String BreakpointRemoveXml(String transId, int id) {
-				var breakpoint = _mdbgProcess.Breakpoints.UserBreakpoints.FirstOrDefault(i => i.Number == id);
-				if (breakpoint != null) {
-					breakpoint.Delete();
-				} else {
-					Console.WriteLine("Breakpoint not found");
-				}
-				//Console.WriteLine(String.Format("File: {0}, Line: {1}, Breakpoint: {2}", file, line, breakpoint.ToString()));
-				return String.Format(
-					 "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
-					+"<response xmlns=\"urn:debugger_protocol_v1\" command=\"breakpoint_remove\" transaction_id=\"{0}\" />",
-					transId
-				);
+			var breakpoint = _mdbgProcess.Breakpoints.UserBreakpoints.FirstOrDefault(i => i.Number == id);
+			if (breakpoint != null) {
+				breakpoint.Delete();
+			} else {
+				Console.WriteLine("Breakpoint not found");
+			}
+			//Console.WriteLine(String.Format("File: {0}, Line: {1}, Breakpoint: {2}", file, line, breakpoint.ToString()));
+			return String.Format(
+					"<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+				+"<response xmlns=\"urn:debugger_protocol_v1\" command=\"breakpoint_remove\" transaction_id=\"{0}\" />",
+				transId
+			);
 		}
 
 		private String ContextGetXml(String transId, int contextId, int depth) {
