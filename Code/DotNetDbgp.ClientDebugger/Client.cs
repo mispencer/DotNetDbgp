@@ -302,14 +302,19 @@ namespace DotNetDbgp.ClientDebugger {
 			var currentDepth = depth == null ? 0 : depth.Value;
 			var frames = activeThread != null ? /*depth == null ?*/ activeThread.Frames /*
 			                                                  : activeThread.Frames.Skip(depth.Value-1).Take(1) */
-			           : new MDbgFrame[] { };
+			           : new MDbgFrame[] { null };
 			foreach(var frame in frames) {
-				var path = (frame.SourcePosition == null ? null : frame.SourcePosition.Path);
+				var path = (frame == null || frame.SourcePosition == null ? null : frame.SourcePosition.Path);
 				if (path == null) {
-					var preferedFrameData = frame.GetPreferedFrameData();
-					path = String.Format("dbgp:{0}", preferedFrameData is ManagedFrameBase ? frame.Function.FullName ?? "null" : "null");
+					String functionFullName = null;
+					if (frame != null) {
+						var preferedFrameData = frame.GetPreferedFrameData();
+						var function = !(preferedFrameData is ManagedFrameBase) ? null : ((ManagedFrameBase)preferedFrameData).Function;
+						functionFullName = function != null ? function.FullName : null;
+					}
+					path = String.Format("dbgp:{0}", functionFullName ?? "null");
 				}
-				var line = (frame.SourcePosition == null ? null : frame.SourcePosition.Line.ToString()) ?? "";
+				var line = (frame == null || frame.SourcePosition == null ? null : frame.SourcePosition.Line.ToString()) ?? "";
 
 				framesString += String.Format(
 					"<stack level=\"{0}\" type=\"file\" filename=\"{1}\" lineno=\"{2}\" where=\"\" cmdbegin=\"\" cmdend=\"\"/>",
