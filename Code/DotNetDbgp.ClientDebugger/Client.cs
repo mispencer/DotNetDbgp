@@ -184,7 +184,7 @@ namespace DotNetDbgp.ClientDebugger {
 								outputMessage = this.ContinuationXml(parsedMessage.Item1, transId);
 								return;
 							case "stack_get": {
-									var depthStr = getParamOrDefault("c", "0");
+									var depthStr = getParamOrDefault("c", "");
 									var depth = String.IsNullOrWhiteSpace(depthStr) ? (int?)null : (int?)int.Parse(depthStr);
 									outputMessage = this.StackGetXml(transId, depth);
 								}
@@ -417,8 +417,8 @@ namespace DotNetDbgp.ClientDebugger {
 
 			var framesString = String.Empty;
 			var currentDepth = depth == null ? 0 : depth.Value;
-			var frames = activeThread != null ? /*depth == null ?*/ activeThread.Frames /*
-			                                                  : activeThread.Frames.Skip(depth.Value-1).Take(1) */
+			var frames = activeThread != null ? depth == null ? activeThread.Frames
+			                                                  : activeThread.Frames.Skip(depth.Value-1).Take(1)
 			           : new MDbgFrame[] { null };
 			foreach(var frame in frames) {
 				var line = String.Empty;
