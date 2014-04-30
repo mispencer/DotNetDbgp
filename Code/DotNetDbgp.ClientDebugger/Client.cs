@@ -244,7 +244,7 @@ namespace DotNetDbgp.ClientDebugger {
 			try {
 				var evalResult = DoEval(rawArguments);
 
-				var resultStr = evalResult.Item1 ? this.ContextGetPropertyXml(evalResult.Item2, 1, input) : String.Empty;
+				var resultStr = evalResult.Item1 ? this.ContextGetPropertyXml(evalResult.Item2, 4, input) : String.Empty;
 
 				return String.Format(
 					"<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
@@ -502,7 +502,7 @@ namespace DotNetDbgp.ClientDebugger {
 
 			var variablesString = new StringBuilder();
 			foreach(var var in variables) {
-				variablesString.Append(this.ContextGetPropertyXml(var, 1));
+				variablesString.Append(this.ContextGetPropertyXml(var, 4));
 			}
 			return String.Format(
 				 "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
@@ -520,7 +520,7 @@ namespace DotNetDbgp.ClientDebugger {
 
 			var var = _mdbgProcess.ResolveVariable(name, frame);
 
-			var variablesString = var != null ? this.ContextGetPropertyXml(var, 1, name) : String.Empty;
+			var variablesString = var != null ? this.ContextGetPropertyXml(var, 4, name) : String.Empty;
 
 			return String.Format(
 				 "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
@@ -546,7 +546,7 @@ namespace DotNetDbgp.ClientDebugger {
 				var managedValue = val as ManagedValue;
 				if (managedValue.IsArrayType) {
 					foreach(var child in managedValue.GetArrayItems().ToList()) {
-						childPropertiesString.Append(this.ContextGetPropertyXml(child, depth-1, fullName+"["+child.Name+"]"));
+						childPropertiesString.Append(this.ContextGetPropertyXml(child, depth-1, fullName+child.Name));
 						childPropertiesCount++;
 					}
 				}
