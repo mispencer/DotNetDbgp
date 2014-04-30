@@ -60,9 +60,11 @@ namespace DotNetDbgp.ClientDebugger {
 					runtime.ModuleLoaded += (Object sender, RuntimeModuleEventArgs args) => {
 						processModule(args.Module);
 					};
+					var managedRuntime = (ManagedRuntime)runtime;
 					foreach(var module in _mdbgProcess.Modules.ToList()) {
-						var managedModule = _mdbgProcess.TemporaryDefaultManagedRuntime.Modules.Lookup(module.FriendlyName);
-						processModule(managedModule);
+						foreach(var managedModule in managedRuntime.Modules.LookupAll(module.FriendlyName, true)) {
+							processModule(managedModule);
+						}
 					}
 				};
 				foreach(var runtime in _mdbgProcess.Runtimes) {
@@ -71,11 +73,6 @@ namespace DotNetDbgp.ClientDebugger {
 				_mdbgProcess.Runtimes.RuntimeAdded += (Object sender, RuntimeLoadEventArgs runTimeArgs) => {
 					processRuntime(runTimeArgs.Runtime);
 				};
-
-				foreach(var module in _mdbgProcess.Modules.ToList()) {
-					var managedModule = _mdbgProcess.TemporaryDefaultManagedRuntime.Modules.Lookup(module.FriendlyName);
-					processModule(managedModule);
-				}
 				
 				var sourcePosition = !_mdbgProcess.Threads.HaveActive || !_mdbgProcess.Threads.Active.HaveCurrentFrame ? null : _mdbgProcess.Threads.Active.CurrentSourcePosition;
 
