@@ -241,20 +241,24 @@ namespace DotNetDbgp.ClientDebugger {
 			var input = System.Text.Encoding.UTF8.GetString(data);
 			var rawArguments = this.ParseEvalMessage(input);
 
-			var evalResult = DoEval(rawArguments);
+			try {
+				var evalResult = DoEval(rawArguments);
 
-			var resultStr = evalResult.Item1 ? this.ContextGetPropertyXml(evalResult.Item2, 1, input) : String.Empty;
+				var resultStr = evalResult.Item1 ? this.ContextGetPropertyXml(evalResult.Item2, 1, input) : String.Empty;
 
-			return String.Format(
-				 "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
-				+"<response xmlns=\"urn:debugger_protocol_v1\" command=\"{0}\" transaction_id=\"{1}\" success=\"{2}\">"
-				+"	{3}"
-				+"</response>",
-				command,
-				transId,
-				evalResult.Item1 ? 1 : 0,
-				resultStr
-			);
+				return String.Format(
+					"<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+					+"<response xmlns=\"urn:debugger_protocol_v1\" command=\"{0}\" transaction_id=\"{1}\" success=\"{2}\">"
+					+"	{3}"
+					+"</response>",
+					command,
+					transId,
+					evalResult.Item1 ? 1 : 0,
+					resultStr
+				);
+			} catch (Exception e) {
+				return this.ErrorXml(command, transId, 206, e.ToString());
+			}
 		}
 
 		private CorValue[] ParseEvalArguments(IEnumerable<String> arguments) {
@@ -377,7 +381,7 @@ namespace DotNetDbgp.ClientDebugger {
 				+"	</error>"
 				+"</response>"
 				,
-				command, transId, errorCode, String.Empty, errorMessage);
+				command, transId, errorCode, String.Empty, this.EscapeXml(errorMessage));
 		}
 
 		private String InitXml(String path) {
