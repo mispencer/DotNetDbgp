@@ -67,7 +67,15 @@ namespace DotNetDbgp.ClientDebugger {
 						processModule(args.Module);
 					};
 					var managedRuntime = (ManagedRuntime)runtime;
-					foreach(var module in _mdbgProcess.Modules.ToList()) {
+
+					IList<MDbgModule> modules = null;
+					while(true) {
+						try {
+							modules = _mdbgProcess.Modules.ToList();
+							break;
+						} catch (InvalidOperationException) {}
+					}
+					foreach(var module in modules) {
 						foreach(var managedModule in managedRuntime.Modules.LookupAll(module.FriendlyName, true)) {
 							processModule(managedModule);
 						}
