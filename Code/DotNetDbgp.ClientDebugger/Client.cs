@@ -23,11 +23,15 @@ namespace DotNetDbgp.ClientDebugger {
 		private WaitHandle _stepWait;
 		private String _messageBuffer = "";
 
+		private int _maxChildren = 100;
+		private int _maxData = 3000;
+		private int _maxDepth = 1;
+
 		private Socket _socket;
 		private MDbgProcess _mdbgProcess;
 
 		public Client(int pid) {
-            _pid = pid;
+			_pid = pid;
 		}
 
 		public void Start() {
@@ -161,6 +165,17 @@ namespace DotNetDbgp.ClientDebugger {
 							outputMessage = this.PropertyGetXml(transId, contextId, name, depth);
 						}
 						break;
+					case "feature_get": {
+							var name = getParamOrDefault("n", "");
+							outputMessage = this.FeatureGetXml(transId, name);
+						}
+						break;
+					case "feature_set": {
+							var name = getParamOrDefault("n", "");
+							var newValue = getParamOrDefault("v", "");
+							outputMessage = this.FeatureSetXml(transId, name, newValue);
+						}
+						break;
 					case "run":
 					case "step_into":
 					case "step_over":
@@ -285,7 +300,7 @@ namespace DotNetDbgp.ClientDebugger {
 			try {
 				var evalResult = DoEval(rawArguments);
 
-				var resultStr = evalResult.Item1 ? this.ContextGetPropertyXml(evalResult.Item2, 4, input) : String.Empty;
+				var resultStr = evalResult.Item1 ? this.ContextGetPropertyXml(evalResult.Item2, _maxDepth, input) : String.Empty;
 
 				return String.Format(
 					"<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
@@ -552,7 +567,7 @@ namespace DotNetDbgp.ClientDebugger {
 
 			var variablesString = new StringBuilder();
 			foreach(var var in variables) {
-				variablesString.Append(this.ContextGetPropertyXml(var, 4));
+				variablesString.Append(this.ContextGetPropertyXml(var, _maxDepth));
 			}
 			return String.Format(
 				 "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
@@ -570,7 +585,7 @@ namespace DotNetDbgp.ClientDebugger {
 
 			var var = _mdbgProcess.ResolveVariable(name, frame);
 
-			var variablesString = var != null ? this.ContextGetPropertyXml(var, 4, name) : String.Empty;
+			var variablesString = var != null ? this.ContextGetPropertyXml(var, _maxDepth, name) : String.Empty;
 
 			return String.Format(
 				 "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
@@ -583,6 +598,95 @@ namespace DotNetDbgp.ClientDebugger {
 			);
 		}
 
+		private String FeatureGetXml(string transId, string name) {
+			String featureValue;
+			bool supported = true;
+			switch(name) {
+				case "language_supports_thread":
+					featureValue = "0";
+					break;
+				case "language_name":
+					featureValue = ".NET";
+					break;
+				case "language_version":
+					featureValue = "NYI";
+					break;
+				case "encoding":
+					featureValue = "UTF-8";
+					break;
+				case "protocol_version":
+					featureValue = "1";
+					break;
+				case "supports_async":
+					featureValue = "1";
+					break;
+				case "data_encoding":
+					featureValue = "base64";
+					break;
+				case "breakpoint_language":
+					featureValue = "";
+					break;
+				case "breakpoint_types":
+					featureValue = "line";
+					break;
+				case "multiple_session":
+					featureValue = "0";
+					break;
+				case "max_children":
+					featureValue = _maxChildren.ToString();
+					break;
+				case "max_data":
+					featureValue = _maxData.ToString();
+					break;
+				case "max_depth":
+					featureValue = _maxDepth.ToString();
+					break;
+				default:
+					featureValue = String.Empty;
+					supported = false;
+					break;
+			}
+
+			return String.Format(
+				 "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+				+"<response xmlns=\"urn:debugger_protocol_v1\" command=\"feature_get\" supported=\"{1}\" transaction_id=\"{0}\">"
+				+"{2}"
+				+"</response>",
+				transId,
+				supported?1:0,
+				this.EscapeXml(featureValue)
+			);
+		}
+
+		private String FeatureSetXml(string transId, string name, string newValue) {
+			try {
+				switch(name) {
+					case "max_children":
+						_maxChildren = int.Parse(newValue);
+						break;
+					case "max_data":
+						_maxData = int.Parse(newValue);
+						break;
+					case "max_depth":
+						_maxDepth = int.Parse(newValue);
+						break;
+					default:
+						return this.ErrorXml("feature_set", transId, 3, name+" is an unknown or unsupported feature");
+				}
+			} catch (FormatException) {
+				return this.ErrorXml("feature_set", transId, 3, "["+newValue+"] is invalid for "+name);
+			}
+
+			return String.Format(
+				 "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+				+"<response xmlns=\"urn:debugger_protocol_v1\" command=\"feature_get\" success=\"{1}\" transaction_id=\"{0}\">"
+				+"{2}"
+				+"</response>",
+				transId,
+				1
+			);
+		}
+
 		private String ContextGetPropertyXml(MDbgValue val, int depth, string fullName = null) {
 			if (depth < 0) {
 				return String.Empty;
@@ -592,27 +696,37 @@ namespace DotNetDbgp.ClientDebugger {
 			}
 			var childPropertiesCount = 0;
 			var childPropertiesString = new StringBuilder();
-			if (depth > 0) {
-				var managedValue = val as ManagedValue;
-				if (managedValue.IsArrayType) {
-					foreach(var child in managedValue.GetArrayItems().ToList()) {
+			var managedValue = val as ManagedValue;
+			if (managedValue.IsArrayType) {
+				foreach(var child in managedValue.GetArrayItems().ToList()) {
+					if (childPropertiesCount <= _maxChildren) {
 						childPropertiesString.Append(this.ContextGetPropertyXml(child, depth-1, fullName+child.Name));
-						childPropertiesCount++;
 					}
+					childPropertiesCount++;
 				}
-				if (managedValue.IsComplexType) {
-					foreach(var child in managedValue.GetFields()) {
+			}
+			if (managedValue.IsComplexType) {
+				foreach(var child in managedValue.GetFields()) {
+					if (childPropertiesCount <= _maxChildren) {
 						childPropertiesString.Append(this.ContextGetPropertyXml(child, depth-1, fullName+"."+child.Name));
-						childPropertiesCount++;
 					}
+					childPropertiesCount++;
 				}
 			}
 			Func<String,String> e = (String i) => this.EscapeXml(i);
 			var myValue = e(val.GetStringValue(0, false));
 			return String.Format(
 				"<property name=\"{0}\" fullname=\"{1}\" type=\"{2}\" classname=\"{2}\" constant=\"0\" children=\"{3}\" size=\"{4}\" encoding=\"none\" numchildren=\"{3}\">{5}{6}</property>",
-				e(val.Name), e(fullName), e(val.TypeName), childPropertiesCount, myValue.Length+childPropertiesString.Length, myValue, childPropertiesString.ToString()
+				e(val.Name), e(fullName), e(val.TypeName), childPropertiesCount, myValue.Length+childPropertiesString.Length, LimitLength(myValue, _maxData), childPropertiesString.ToString()
 			);
+		}
+
+		private String LimitLength(String val, int maxLength) {
+			if (val.Length <= maxLength) {
+				return val;
+			} else {
+				return val.Substring(0, maxLength);
+			}
 		}
 
 		private Tuple<String,IDictionary<String,String>,byte[]> ParseInputMessage(String message) {
