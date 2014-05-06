@@ -18,6 +18,11 @@ namespace DotNetDbgp.ClientDebugger {
 		private readonly Object _mdbgProcessLock = new Object();
 		private bool _detaching = false;
 
+		private String _steppingCommand;
+		private String _steppingTransId;
+		private WaitHandle _stepWait;
+		private String _messageBuffer = "";
+
 		private Socket _socket;
 		private MDbgProcess _mdbgProcess;
 
@@ -39,9 +44,6 @@ namespace DotNetDbgp.ClientDebugger {
 
 		public void Run() {
 			try {
-				var socketBuffer = new byte[4096];
-				var messageBuffer = "";
-
 				var engine = new MDbgEngine();
 				_mdbgProcess = engine.Attach(_pid, VersionPolicy.GetDefaultAttachVersion(_pid));
 				_mdbgProcess.AsyncStop().WaitOne();
@@ -73,7 +75,7 @@ namespace DotNetDbgp.ClientDebugger {
 				_mdbgProcess.Runtimes.RuntimeAdded += (Object sender, RuntimeLoadEventArgs runTimeArgs) => {
 					processRuntime(runTimeArgs.Runtime);
 				};
-				
+
 				var sourcePosition = !_mdbgProcess.Threads.HaveActive || !_mdbgProcess.Threads.Active.HaveCurrentFrame ? null : _mdbgProcess.Threads.Active.CurrentSourcePosition;
 
 				_socket.Send(Encoding.UTF8.GetBytes(this.GenerateOutputMessage(this.InitXml(sourcePosition != null ? sourcePosition.Path : null))));
@@ -84,134 +86,18 @@ namespace DotNetDbgp.ClientDebugger {
 					System.Environment.Exit(-1);
 				};
 
+				var socketBuffer = new byte[4096];
+				var receiveToken = _socket.BeginReceive(socketBuffer, 0, socketBuffer.Length, SocketFlags.None, null, null);
 				while(true) {
-					var readLength = _socket.Receive(socketBuffer);
-					if (readLength > 0) {
-						messageBuffer += Encoding.UTF8.GetString(socketBuffer, 0, readLength);
-					}
-					if (readLength < 0) {
-						throw new Exception("Receive failed");
-					}
+					var waitArray = _stepWait != null ? new WaitHandle[] { receiveToken.AsyncWaitHandle, _stepWait } : new WaitHandle[] { receiveToken.AsyncWaitHandle };
+					var waitIndex = System.Threading.WaitHandle.WaitAny(waitArray);
 
-					while(messageBuffer.Contains("\0")) {
-						var message = messageBuffer.Substring(0, messageBuffer.IndexOf('\0'));
-#pragma warning disable 162
-						if (SHOW_MESSAGES) { Console.WriteLine("Message: "+(message.Length > 1000 ? message.Substring(0, 1000) : message)); }
-#pragma warning restore 162
-
-						messageBuffer = messageBuffer.Substring(message.Length+1);
-						var parsedMessage = this.ParseInputMessage(message);
-
-						Func<String,String,String> getParamOrDefault = (String key, String defaultVal) => {
-							string val;
-							parsedMessage.Item2.TryGetValue("-"+key, out val);
-							val = val ?? defaultVal;
-							return val;
-						};
-
-						var transId = getParamOrDefault("i", "");
-
-						var command = parsedMessage.Item1;
-
-						String outputMessage = null;
-						switch(command) {
-							case "detach":
-								this.Detach();
-								return;
-							case "context_names":
-								outputMessage = this.ContextNamesXml(transId);
-								break;
-							case "context_get": {
-									var contextId = int.Parse(getParamOrDefault("c", "0"));
-									var depth = int.Parse(getParamOrDefault("d", "0"));
-									outputMessage = this.ContextGetXml(transId, contextId, depth);
-								}
-								break;
-							case "property_get": {
-									var contextId = int.Parse(getParamOrDefault("c", "0"));
-									var name = getParamOrDefault("n", "");
-									var depth = int.Parse(getParamOrDefault("d", "0"));
-									outputMessage = this.PropertyGetXml(transId, contextId, name, depth);
-								}
-								break;
-							case "run":
-							case "step_into":
-							case "step_over":
-							case "step_out":
-								if (!_mdbgProcess.IsRunning) {
-									var validStop = false;
-									while(!validStop) {
-										WaitHandle wait = null;
-										lock(_mdbgProcessLock) {
-											switch (command) {
-												case "run":
-													wait = _mdbgProcess.Go();
-													break;
-												case "step_into":
-													wait = StepImpl(_mdbgProcess, StepperType.In, false);
-													break;
-												case "step_over":
-													wait = StepImpl(_mdbgProcess, StepperType.Over, false);
-													break;
-												case "step_out":
-													wait = StepImpl(_mdbgProcess, StepperType.Out, false);
-													break;
-												default:
-													throw new Exception("Assertion failed");
-											}
-										}
-										wait.WaitOne();
-										lock(_mdbgProcessLock) {
-											validStop = _mdbgProcess.StopReason is BreakpointHitStopReason
-											|| (_mdbgProcess.StopReason is StepCompleteStopReason && _mdbgProcess.Threads.HaveActive && _mdbgProcess.Threads.Active.CurrentSourcePosition != null && _mdbgProcess.Threads.Active.CurrentSourcePosition.Path != null)
-											|| _detaching;
-											if (!validStop && !(_mdbgProcess.StopReason is StepCompleteStopReason)) {
-												var errorStop = _mdbgProcess.StopReason as ErrorStopReason;
-												if (errorStop != null) {
-													Console.WriteLine(String.Format("Continuing errored: {0}", errorStop.ExceptionThrown));
-													throw errorStop.ExceptionThrown;
-												} else {
-													Console.WriteLine(String.Format("Continuing - invalid stop: {0}", _mdbgProcess.StopReason));
-												}
-											}
-										}
-									}
-								}
-								outputMessage = this.ContinuationXml(parsedMessage.Item1, transId);
-								break;
-							case "stop":
-								_mdbgProcess.Kill().WaitOne();
-								outputMessage = this.ContinuationXml(parsedMessage.Item1, transId);
-								return;
-							case "stack_get": {
-									var depthStr = getParamOrDefault("c", "");
-									var depth = String.IsNullOrWhiteSpace(depthStr) ? (int?)null : (int?)int.Parse(depthStr);
-									outputMessage = this.StackGetXml(transId, depth);
-								}
-								break;
-							case "breakpoint_set":
-								var type = getParamOrDefault("t", "");
-								var file = getParamOrDefault("f", "");
-								var line = int.Parse(getParamOrDefault("n", "0"));
-								var state = getParamOrDefault("s", "");
-								outputMessage = this.BreakpointSetXml(transId, type, file, line, state);
-								break;
-							case "breakpoint_remove":
-								var id = int.Parse(getParamOrDefault("d", "0"));
-								outputMessage = this.BreakpointRemoveXml(transId, id);
-								break;
-							case "eval":
-							case "expr":
-							case "exec":
-								outputMessage = this.EvalXml(parsedMessage.Item1, transId, parsedMessage.Item3);
-								break;
-							default:
-								outputMessage = this.ErrorXml(parsedMessage.Item1, transId, 4, "Test");
-								break;
-						}
-
-						var realMessage = this.GenerateOutputMessage(outputMessage);
-						_socket.Send(Encoding.UTF8.GetBytes(realMessage));
+					if (waitIndex == 0) {
+						this.HandleReadySocket(receiveToken, socketBuffer);
+						if (_socket == null) { return; }
+						receiveToken = _socket.BeginReceive(socketBuffer, 0, socketBuffer.Length, SocketFlags.None, null, null);
+					} else if (waitIndex == 1) {
+						this.HandleBreak();
 					}
 				}
 			} catch (Exception e) {
@@ -221,6 +107,161 @@ namespace DotNetDbgp.ClientDebugger {
 					Console.Error.WriteLine("DETACH FAILURE:\n"+e2.ToString());
 				}
 				Console.Error.WriteLine(e.ToString());
+			}
+		}
+
+		private void HandleReadySocket(IAsyncResult socketToken, byte[] socketBuffer) {
+			var readLength = _socket.EndReceive(socketToken);
+
+			if (readLength > 0) {
+				_messageBuffer += Encoding.UTF8.GetString(socketBuffer, 0, readLength);
+			}
+			if (readLength < 0) {
+				throw new Exception("Receive failed");
+			}
+
+			while(_messageBuffer.Contains("\0")) {
+				var message = _messageBuffer.Substring(0, _messageBuffer.IndexOf('\0'));
+#pragma warning disable 162
+				if (SHOW_MESSAGES) { Console.WriteLine("Message: "+(message.Length > 1000 ? message.Substring(0, 1000) : message)); }
+#pragma warning restore 162
+
+				_messageBuffer = _messageBuffer.Substring(message.Length+1);
+				var parsedMessage = this.ParseInputMessage(message);
+
+				Func<String,String,String> getParamOrDefault = (String key, String defaultVal) => {
+					string val;
+					parsedMessage.Item2.TryGetValue("-"+key, out val);
+					val = val ?? defaultVal;
+					return val;
+				};
+
+				var transId = getParamOrDefault("i", "");
+
+				var command = parsedMessage.Item1;
+
+				String outputMessage;
+				switch(command) {
+					case "detach":
+						this.Detach();
+						return;
+					case "context_names":
+						outputMessage = this.ContextNamesXml(transId);
+						break;
+					case "context_get": {
+							var contextId = int.Parse(getParamOrDefault("c", "0"));
+							var depth = int.Parse(getParamOrDefault("d", "0"));
+							outputMessage = this.ContextGetXml(transId, contextId, depth);
+						}
+						break;
+					case "property_get": {
+							var contextId = int.Parse(getParamOrDefault("c", "0"));
+							var name = getParamOrDefault("n", "");
+							var depth = int.Parse(getParamOrDefault("d", "0"));
+							outputMessage = this.PropertyGetXml(transId, contextId, name, depth);
+						}
+						break;
+					case "run":
+					case "step_into":
+					case "step_over":
+					case "step_out":
+						if (_stepWait == null) {
+							_steppingCommand = command;
+							_steppingTransId = transId;
+							outputMessage = null;
+							this.Step();
+						} else {
+							outputMessage = this.ErrorXml(parsedMessage.Item1, transId, 5, "Requested stepping while already stepping");
+						}
+						break;
+					case "stop":
+						_mdbgProcess.Kill().WaitOne();
+						outputMessage = this.ContinuationXml(parsedMessage.Item1, transId);
+						return;
+					case "stack_get": {
+							var depthStr = getParamOrDefault("c", "");
+							var depth = String.IsNullOrWhiteSpace(depthStr) ? (int?)null : (int?)int.Parse(depthStr);
+							outputMessage = this.StackGetXml(transId, depth);
+						}
+						break;
+					case "breakpoint_set":
+						var type = getParamOrDefault("t", "");
+						var file = getParamOrDefault("f", "");
+						var line = int.Parse(getParamOrDefault("n", "0"));
+						var state = getParamOrDefault("s", "");
+						outputMessage = this.BreakpointSetXml(transId, type, file, line, state);
+						break;
+					case "breakpoint_remove":
+						var id = int.Parse(getParamOrDefault("d", "0"));
+						outputMessage = this.BreakpointRemoveXml(transId, id);
+						break;
+					case "eval":
+					case "expr":
+					case "exec":
+						outputMessage = this.EvalXml(parsedMessage.Item1, transId, parsedMessage.Item3);
+						break;
+					case "status":
+						outputMessage = this.ContinuationXml(parsedMessage.Item1, transId);
+						break;
+					default:
+						outputMessage = this.ErrorXml(parsedMessage.Item1, transId, 4, "Test");
+						break;
+				}
+
+				if (outputMessage != null) {
+					var realMessage = this.GenerateOutputMessage(outputMessage);
+					_socket.Send(Encoding.UTF8.GetBytes(realMessage));
+				}
+			}
+		}
+
+		private void HandleBreak() {
+			lock(_mdbgProcessLock) {
+				var validStop = _mdbgProcess.StopReason is AsyncStopStopReason
+				|| _mdbgProcess.StopReason is BreakpointHitStopReason
+				|| _mdbgProcess.StopReason is StepCompleteStopReason
+				|| _detaching;
+				if (validStop) {
+					var outputMessage = this.ContinuationXml(_steppingCommand, _steppingTransId);
+					var realMessage = this.GenerateOutputMessage(outputMessage);
+					_socket.Send(Encoding.UTF8.GetBytes(realMessage));
+					_stepWait = null;
+					_steppingCommand = null;
+					_steppingTransId = null;
+				} else {
+					var errorStop = _mdbgProcess.StopReason as ErrorStopReason;
+					if (errorStop != null) {
+						Console.WriteLine(String.Format("Continuing errored: {0}", errorStop.ExceptionThrown));
+						throw errorStop.ExceptionThrown;
+					} else {
+						Console.WriteLine(String.Format("Continuing - invalid stop: {0}", _mdbgProcess.StopReason));
+						this.Step();
+					}
+				}
+			}
+		}
+
+		private void Step() {
+			lock(_mdbgProcessLock) {
+				switch (_steppingCommand) {
+					case "run":
+						_stepWait = _mdbgProcess.Go();
+						break;
+					case "step_into":
+						_stepWait = StepImpl(_mdbgProcess, StepperType.In, false);
+						break;
+					case "step_over":
+						_stepWait = StepImpl(_mdbgProcess, StepperType.Over, false);
+						break;
+					case "step_out":
+						_stepWait = StepImpl(_mdbgProcess, StepperType.Out, false);
+						break;
+					default:
+						if (_steppingCommand != null) {
+							throw new Exception("Assertion failed: "+_steppingCommand);
+						}
+						break;
+				}
 			}
 		}
 
@@ -443,7 +484,7 @@ namespace DotNetDbgp.ClientDebugger {
 				);
 				currentDepth++;
 			}
-			
+
 			return String.Format(
 				 "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
 				+"<response xmlns=\"urn:debugger_protocol_v1\" command=\"stack_get\" transaction_id=\"{0}\">"
@@ -461,7 +502,16 @@ namespace DotNetDbgp.ClientDebugger {
 				}
 				file = file.Replace('/', '\\');
 				Console.WriteLine(String.Format("File: {0}, Line: {1}", file, line));
-				var breakpoint = _mdbgProcess.Breakpoints.CreateBreakpoint(file, line, true);
+
+				MDbgBreakpoint breakpoint;
+				lock(_mdbgProcessLock) {
+					_mdbgProcess.AsyncStop().WaitOne();
+					breakpoint = _mdbgProcess.Breakpoints.CreateBreakpoint(file, line, true);
+					if (!(_mdbgProcess.StopReason is AsyncStopStopReason)) {
+						Console.WriteLine(String.Format("Consumed unexpected stop"));
+					}
+					this.Step();
+				}
 				Console.WriteLine(String.Format("Breakpoint: {0}", breakpoint.ToString()));
 				return String.Format(
 					 "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
@@ -654,6 +704,7 @@ namespace DotNetDbgp.ClientDebugger {
 				} finally {
 					_mdbgProcess.Detach().WaitOne();
 					_socket.Close();
+					_socket = null;
 				}
 				_detaching = false;
 			}
