@@ -653,6 +653,27 @@ namespace DotNetDbgp.ClientDebugger {
 				case "max_depth":
 					featureValue = _maxDepth.ToString();
 					break;
+				case "detach":
+				case "context_names":
+				case "context_get":
+				case "property_get":
+				case "feature_get":
+				case "feature_set":
+				case "run":
+				case "step_into":
+				case "step_over":
+				case "step_out":
+				case "break":
+				case "stop":
+				case "stack_get":
+				case "breakpoint_set":
+				case "breakpoint_remove":
+				case "eval":
+				case "expr":
+				case "exec":
+				case "status":
+					featureValue = "1";
+					break;
 				default:
 					featureValue = String.Empty;
 					supported = false;
