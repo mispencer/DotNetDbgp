@@ -81,12 +81,12 @@ namespace DotNetDbgp.ClientDebugger {
 						}
 					}
 				};
-				foreach(var runtime in _mdbgProcess.Runtimes) {
-					processRuntime(runtime);
-				}
 				_mdbgProcess.Runtimes.RuntimeAdded += (Object sender, RuntimeLoadEventArgs runTimeArgs) => {
 					processRuntime(runTimeArgs.Runtime);
 				};
+				foreach(var runtime in _mdbgProcess.Runtimes) {
+					processRuntime(runtime);
+				}
 
 				var sourcePosition = !_mdbgProcess.Threads.HaveActive || !_mdbgProcess.Threads.Active.HaveCurrentFrame ? null : _mdbgProcess.Threads.Active.CurrentSourcePosition;
 
