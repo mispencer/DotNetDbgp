@@ -188,7 +188,8 @@ namespace DotNetDbgp.ClientDebugger {
 					case "step_into":
 					case "step_over":
 					case "step_out":
-						if (_stepWait == null) {
+					case "break":
+						if (_stepWait == null || command == "break") {
 							_steppingCommand = command;
 							_steppingTransId = transId;
 							outputMessage = null;
@@ -267,6 +268,9 @@ namespace DotNetDbgp.ClientDebugger {
 		private void Step() {
 			lock(_mdbgProcessLock) {
 				switch (_steppingCommand) {
+					case "break":
+						_stepWait = _mdbgProcess.AsyncStop();
+						break;
 					case "run":
 						_stepWait = _mdbgProcess.Go();
 						break;
