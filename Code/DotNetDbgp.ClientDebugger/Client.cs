@@ -15,6 +15,7 @@ namespace DotNetDbgp.ClientDebugger {
 	public class Client {
 		private const bool SHOW_MESSAGES = false;
 		private readonly int _pid;
+		private readonly int _port;
 		private readonly Object _mdbgProcessLock = new Object();
 		private bool _detaching = false;
 
@@ -30,13 +31,14 @@ namespace DotNetDbgp.ClientDebugger {
 		private Socket _socket;
 		private MDbgProcess _mdbgProcess;
 
-		public Client(int pid) {
+		public Client(int pid, int port) {
 			_pid = pid;
+			_port = port;
 		}
 
 		public void Start() {
 			var ip = IPAddress.Loopback;
-			var ipEndPoint = new IPEndPoint(ip, 9000);
+			var ipEndPoint = new IPEndPoint(ip, _port);
 
 			_socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
 			_socket.Connect(ipEndPoint);
