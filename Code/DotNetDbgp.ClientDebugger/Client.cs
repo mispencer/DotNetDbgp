@@ -295,7 +295,7 @@ namespace DotNetDbgp.ClientDebugger {
 		private static WaitHandle StepImpl(MDbgProcess mdbgProcess, StepperType type, bool nativeStepping) {
 			//HACKHACKHACK
 			mdbgProcess.GetType().GetMethod("EnsureCanExecute", BindingFlags.NonPublic|BindingFlags.Instance, null, new[] { typeof(String) }, null).Invoke(mdbgProcess, new Object[] { "stepping" });
-			var frameData = (mdbgProcess.Runtimes.NativeRuntime == null ? mdbgProcess.Threads.Active.BottomFrame.GetPreferedFrameData((IRuntime) mdbgProcess.Runtimes.ManagedRuntime) : mdbgProcess.Threads.Active.BottomFrame.GetPreferedFrameData((IRuntime) mdbgProcess.Runtimes.NativeRuntime));
+			var frameData = mdbgProcess.Threads.Active.BottomFrame.GetPreferedFrameData(((IRuntime)mdbgProcess.Runtimes.NativeRuntime ?? mdbgProcess.Runtimes.ManagedRuntime));
 			var stepDesc = frameData.CreateStepperDescriptor(type, nativeStepping);
 			var managerStepDesc = stepDesc as ManagedStepperDescriptor;
 			if (managerStepDesc != null) managerStepDesc.IsJustMyCode = true;
