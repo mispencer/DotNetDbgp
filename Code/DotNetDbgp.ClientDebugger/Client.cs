@@ -366,6 +366,17 @@ namespace DotNetDbgp.ClientDebugger {
 			return function == null ? null : function.CorFunction;
 		}
 
+		private CorFunction GetMethod(CorValue thisObj, String name) {
+			var managedValue = new ManagedValue(_mdbgProcess.Threads.Active.Get<ManagedThread>().Runtime, thisObj);
+			ManagedModule managedModule;
+			var type = _mdbgProcess.ResolveClass(managedValue.TypeName, out managedModule);
+			if (type != null && managedModule != null) {
+				var function =  _mdbgProcess.ResolveFunctionName(managedModule, managedValue.TypeName, name);
+				return function == null ? null : function.CorFunction;
+			}
+			return null;
+		}
+
 		private Tuple<bool,ManagedValue> DoEval(Tuple<String,IList<String>> rawArguments) {
 			var function = this.GetFunction(rawArguments.Item1);
 			var arguments = rawArguments.Item2;
@@ -390,29 +401,45 @@ namespace DotNetDbgp.ClientDebugger {
 						}
 					}
 					return Tuple.Create(true, new ManagedValue(_mdbgProcess.Threads.Active.Get<ManagedThread>().Runtime, source));
+				} else if (arguments.First() == ".") {
+					var methodArgs = arguments.Skip(2);
+					var thisObj = this.ParseEvalArguments(new[] {rawArguments.Item1}).Single();
+					var method = this.GetMethod(thisObj, arguments.Skip(1).First());
+					if (method != null) {
+						var parsedArguments = this.ParseEvalArguments(methodArgs);
+						var functionArgs = (new List<CorValue> { thisObj });
+						functionArgs.AddRange(parsedArguments);
+						return this.DoFunctionEval(method, functionArgs.ToArray());
+					} else {
+						return Tuple.Create(false, (ManagedValue)null);
+					}
 				} else {
 					return Tuple.Create(false, (ManagedValue)null);
 				}
 			} else {
 				var parsedArguments = this.ParseEvalArguments(arguments);
-				var managedThread = _mdbgProcess.Threads.Active.Get<ManagedThread>();
-				try {
-					_mdbgProcess.TemporaryDefaultManagedRuntime.CorProcess.SetAllThreadsDebugState(CorDebugThreadState.THREAD_SUSPEND, managedThread.CorThread);
-					var eval = managedThread.CorThread.CreateEval();
-					eval.CallFunction(function, parsedArguments);
-					while(true) {
-						_mdbgProcess.Go().WaitOne();
-						if (_mdbgProcess.StopReason is EvalExceptionStopReason || _mdbgProcess.StopReason is ProcessExitedStopReason) {
-							return Tuple.Create(false, (ManagedValue)null);
-						}
-						if (_mdbgProcess.StopReason is EvalCompleteStopReason) {
-							break;
-						}
+				return this.DoFunctionEval(function, parsedArguments);
+			}
+		}
+
+		private Tuple<bool,ManagedValue> DoFunctionEval(CorFunction function, CorValue[] arguments) {
+			var managedThread = _mdbgProcess.Threads.Active.Get<ManagedThread>();
+			try {
+				_mdbgProcess.TemporaryDefaultManagedRuntime.CorProcess.SetAllThreadsDebugState(CorDebugThreadState.THREAD_SUSPEND, managedThread.CorThread);
+				var eval = managedThread.CorThread.CreateEval();
+				eval.CallFunction(function, arguments);
+				while(true) {
+					_mdbgProcess.Go().WaitOne();
+					if (_mdbgProcess.StopReason is EvalExceptionStopReason || _mdbgProcess.StopReason is ProcessExitedStopReason) {
+						return Tuple.Create(false, (ManagedValue)null);
 					}
-					return Tuple.Create(true, new ManagedValue(managedThread.Runtime, eval.Result));
-				} finally {
-					_mdbgProcess.TemporaryDefaultManagedRuntime.CorProcess.SetAllThreadsDebugState(CorDebugThreadState.THREAD_RUN, managedThread.CorThread);
+					if (_mdbgProcess.StopReason is EvalCompleteStopReason) {
+						break;
+					}
 				}
+				return Tuple.Create(true, new ManagedValue(managedThread.Runtime, eval.Result));
+			} finally {
+				_mdbgProcess.TemporaryDefaultManagedRuntime.CorProcess.SetAllThreadsDebugState(CorDebugThreadState.THREAD_RUN, managedThread.CorThread);
 			}
 		}
 
