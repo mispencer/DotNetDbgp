@@ -257,8 +257,19 @@ namespace DotNetDbgp.ClientDebugger {
 				} else {
 					var errorStop = _mdbgProcess.StopReason as ErrorStopReason;
 					if (errorStop != null) {
-						Console.WriteLine(String.Format("Continuing errored: {0}", errorStop.ExceptionThrown));
-						throw errorStop.ExceptionThrown;
+						// HACK - Work around for MDBG bug - it errors if unknown threads exit
+						if (errorStop.ExceptionThrown.Message == "The given key was not present in the dictionary."
+							&& errorStop.ExceptionThrown.StackTrace.Contains("Microsoft.Samples.Debugging.MdbgEngine.ManagedRuntime.ExitThreadEventHandler")) {
+							Console.WriteLine(String.Format("Continuing - invalid stop: {0}", "MDBG exit thread bug"));
+							_mdbgProcess.AsyncStop().WaitOne(); // Force valid stop state
+							if (!(_mdbgProcess.StopReason is AsyncStopStopReason)) {
+								Console.WriteLine(String.Format("Consumed unexpected stop"));
+							}
+							this.Step();
+						} else {
+							Console.WriteLine(String.Format("Continuing erred: {0}", errorStop.ExceptionThrown));
+							throw errorStop.ExceptionThrown;
+						}
 					} else {
 						Console.WriteLine(String.Format("Continuing - invalid stop: {0}", _mdbgProcess.StopReason));
 						this.Step();
