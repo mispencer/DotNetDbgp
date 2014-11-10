@@ -377,13 +377,74 @@ namespace DotNetDbgp.ClientDebugger {
 			return function == null ? null : function.CorFunction;
 		}
 
-		private CorFunction GetMethod(CorValue thisObj, String name) {
-			var managedValue = new ManagedValue(_mdbgProcess.Threads.Active.Get<ManagedThread>().Runtime, thisObj);
+		//private CorFunction GetMethod(CorValue thisObj, String name, ManagedThread managedThread) {
+		//	var managedValue = new ManagedValue(managedThread.Runtime, thisObj);
+		//	ManagedModule managedModule;
+		//	var type = _mdbgProcess.ResolveClass(managedValue.TypeName, managedThread.CorThread.AppDomain, out managedModule);
+		//	if (type != null && managedModule != null) {
+		//		var function =  _mdbgProcess.ResolveFunctionName(managedModule, managedValue.TypeName, name);
+		//		return function == null ? null : function.CorFunction;
+		//	}
+		//	return null;
+		//}
+
+		private Type GetType(CorClass corClass, ManagedThread managedThread, out ManagedModule managedModule) {
+			if (corClass != null) {
+				managedModule = managedThread.Runtime.Modules.Lookup(corClass.Module);
+				return managedModule.Importer.GetType(corClass.Token);
+			} else {
+				managedModule = null;
+				return null;
+			}
+		}
+
+		private bool IsAssignableFrom(Type targetType, Type sourceType, ManagedModule managedModule) {
+			var sourceTypeToken = sourceType.MetadataToken;
+			var targetTypeToken = targetType.MetadataToken;
+			while(true) {
+				if (targetTypeToken == sourceTypeToken) {
+					return true;
+				}
+				var interfaceTokens = managedModule.Importer.EnumInterfaceImpls(sourceTypeToken);
+				if(interfaceTokens.Any(i => i == targetTypeToken)) {
+					return true;
+				}
+				String typeName; TypeAttributes typeAttributes; int extends;
+				managedModule.Importer.GetTypeDefProps(sourceTypeToken, out typeName, out typeAttributes, out extends);
+				if (typeName == "System.Object") { break; }
+				sourceTypeToken = extends;
+			}
+			return false;
+		}
+
+		private CorFunction GetMethod(CorValue thisObj, String name, CorValue[] arguments, ManagedThread managedThread) {
+			ManagedModule dummy;
+			var argumentTypes = arguments.Select(i => this.GetType(i.ExactType.Class, managedThread, out dummy)).ToArray();
 			ManagedModule managedModule;
-			var type = _mdbgProcess.ResolveClass(managedValue.TypeName, out managedModule);
-			if (type != null && managedModule != null) {
-				var function =  _mdbgProcess.ResolveFunctionName(managedModule, managedValue.TypeName, name);
-				return function == null ? null : function.CorFunction;
+			var corClass = thisObj.ExactType.Class;
+
+			var type = this.GetType(corClass, managedThread, out managedModule);
+			while(type != null && managedModule != null) {
+				var methods = type.GetMethods().Where(i => i != null && i.Name == name).ToArray();
+				foreach(var method in methods) {
+					if (method != null && method.Name == name) {
+						var parameters = method.GetParameters().ToArray();
+						var okay = parameters.Select((i, j) => j).Aggregate(true, (i, j) =>
+							i && argumentTypes.Length > j ? IsAssignableFrom(parameters[j].ParameterType, argumentTypes[j], managedModule)
+							: parameters[j].IsOptional
+						);
+						if (okay) {
+							var function = managedModule.GetFunction(method.MetadataToken);
+							if (function != null) {
+								return function.CorFunction;
+							}
+						}
+					}
+				}
+				String typeName; TypeAttributes typeAttributes; int extends;
+				managedModule.Importer.GetTypeDefProps(corClass.Token, out typeName, out typeAttributes, out extends);
+				corClass = typeName != "System.Object" ? managedModule.CorModule.GetClassFromToken(extends) : (CorClass)null;
+				type = this.GetType(corClass, managedThread, out managedModule);
 			}
 			return null;
 		}
@@ -420,17 +481,17 @@ namespace DotNetDbgp.ClientDebugger {
 					} else if (arguments.First() == ".") {
 						var methodArgs = arguments.Skip(2);
 						var thisObj = this.ParseEvalArguments(new[] {rawArguments.Item1}, eval).Single();
-						var method = this.GetMethod(thisObj, arguments.Skip(1).First());
+						var parsedArguments = this.ParseEvalArguments(methodArgs, eval);
+						var method = this.GetMethod(thisObj, arguments.Skip(1).First(), parsedArguments, managedThread);
 						if (method != null) {
-							var parsedArguments = this.ParseEvalArguments(methodArgs, eval);
 							var functionArgs = (new List<CorValue> { thisObj });
 							functionArgs.AddRange(parsedArguments);
 							return this.DoFunctionEval(method, functionArgs.ToArray(), eval, managedThread);
 						} else {
-							return Tuple.Create(false, (ManagedValue)null);
+							throw new Exception("Could not find method");
 						}
 					} else {
-						return Tuple.Create(false, (ManagedValue)null);
+						throw new Exception("Could not parse eval");
 					}
 				} else {
 					var parsedArguments = this.ParseEvalArguments(arguments, eval);
@@ -448,7 +509,7 @@ namespace DotNetDbgp.ClientDebugger {
 				if (_mdbgProcess.StopReason is EvalExceptionStopReason || _mdbgProcess.StopReason is ProcessExitedStopReason) {
 					var errorStop = _mdbgProcess.StopReason as EvalExceptionStopReason;
 					if (errorStop != null) {
-						throw new Exception(errorStop.Eval.Result.ToString());
+						throw new Exception(InternalUtil.PrintCorType(_mdbgProcess, errorStop.Eval.Result.ExactType));
 					} else {
 						return Tuple.Create(false, (ManagedValue)null);
 					}
@@ -836,29 +897,24 @@ namespace DotNetDbgp.ClientDebugger {
 			var i = commandSplitter;
 			for(; i < message.Length; i++) {
 				var messageChar = message[i];
-				if (!inQuotes) {
-					if (messageChar == ' ') {
-						if (part.Length != 0) {
-							if (part == "--" && hasBody) {
-								i++;
-								break;
-							}
-							parts.Add(part);
-							//Console.WriteLine("Part: "+part);
-							part = String.Empty;
-						}
-						continue;
-					} else if (messageChar == '"') {
-						inQuotes = true;
-						continue;
-					}
-				} else if (escape) {
+				if (escape) {
 					escape = false;
 				} else if (messageChar == '"') {
-					inQuotes = false;
+					inQuotes = !inQuotes;
 					continue;
 				} else if (messageChar == '\\') {
 					escape = true;
+					continue;
+				} else if (messageChar == ' ' && !inQuotes) {
+					if (part.Length != 0) {
+						if (part == "--" && hasBody) {
+							i++;
+							break;
+						}
+						parts.Add(part);
+						//Console.WriteLine("Part: "+part);
+						part = String.Empty;
+					}
 					continue;
 				}
 				part += messageChar;

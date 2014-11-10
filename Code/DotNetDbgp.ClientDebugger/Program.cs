@@ -30,6 +30,8 @@ namespace DotNetDbgp.ClientDebugger {
 					throw new Exception("Unknown pid");
 				}
 
+				Console.WriteLine("PID: "+System.Diagnostics.Process.GetCurrentProcess().Id);
+
 				new Client(pid.Value, port).Start();
 			} catch (Exception e) {
 				Console.WriteLine(e.ToString());
