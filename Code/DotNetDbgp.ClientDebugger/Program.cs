@@ -7,6 +7,11 @@ using System.Threading.Tasks;
 namespace DotNetDbgp.ClientDebugger {
 	public class Program {
 		static void Main(String[] args) {
+			//Console.WriteLine("Arguments:");
+			//for(var i = 0; i < args.Length; i++) {
+			//	Console.WriteLine(String.Format("{0}: [{1}]", i, args[i]));
+			//}
+
 			try {
 				int port = 9000;
 				int? pid = null;
@@ -35,11 +40,18 @@ namespace DotNetDbgp.ClientDebugger {
 				new Client(pid.Value, port).Start();
 			} catch (Exception e) {
 				Console.WriteLine(e.ToString());
+				Console.WriteLine("Press any key to continue...");
+				Console.ReadKey();
 			}
 		}
 
 		private static int? FindPidForAppPool(String appPoolName) {
 			var appPools = new Microsoft.Web.Administration.ServerManager().ApplicationPools;
+
+			Console.WriteLine("AppPools:");
+			foreach(var appPoolI in appPools) {
+				Console.WriteLine(appPoolI.Name);
+			}
 
 			var appPool = appPools.SingleOrDefault(i => i.Name == appPoolName);
 			if (appPool == null) { return null; }
