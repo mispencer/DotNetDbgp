@@ -6,6 +6,7 @@ using System.Threading;
 using System.Net;
 using System.Net.Sockets;
 using System.Reflection;
+using System.Xml;
 
 using Microsoft.Samples.Debugging.MdbgEngine;
 using Microsoft.Samples.Debugging.CorDebug;
@@ -935,7 +936,26 @@ namespace DotNetDbgp.ClientDebugger {
 		}
 
 		private String EscapeXml(String input) {
-			return new System.Xml.Linq.XText(input == null ? "<null>" : input).ToString().Replace("\"", "&quot;");
+			return new System.Xml.Linq.XText(input == null ? "<null>" : this.EscapeXmlCharacters(input)).ToString().Replace("\"", "&quot;");
+		}
+
+		private String EscapeXmlCharacters(String input) {
+			try {
+				// throws exception if string contains any invalid characters.
+				return XmlConvert.VerifyXmlChars(input);
+			} catch {
+				var sb = new StringBuilder();
+
+				foreach (var c in input) {
+					if (XmlConvert.IsXmlChar(c)) {
+						sb.Append(c);
+					} else {
+						sb.Append(string.Format("[0x{0:X2}]", (short)c));
+					}
+				}
+
+				return sb.ToString();
+			}
 		}
 
 		public void Detach() {
