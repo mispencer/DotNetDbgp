@@ -825,6 +825,11 @@ namespace DotNetDbgp.ClientDebugger {
 			);
 		}
 
+		private readonly IList<Type> AUTOMATICLY_STRINGIFY = new List<Type> {
+			typeof(System.Decimal),
+			typeof(System.DateTime),
+		};
+
 		private String ContextGetPropertyXml(MDbgValue val, int depth, string fullName = null) {
 			if (depth < 0) {
 				return String.Empty;
@@ -835,6 +840,7 @@ namespace DotNetDbgp.ClientDebugger {
 			var childPropertiesCount = 0;
 			var childPropertiesString = new StringBuilder();
 			var managedValue = val as ManagedValue;
+
 			if (managedValue.IsArrayType) {
 				foreach(var child in managedValue.GetArrayItems().ToList()) {
 					if (childPropertiesCount <= _maxChildren) {
@@ -843,7 +849,8 @@ namespace DotNetDbgp.ClientDebugger {
 					childPropertiesCount++;
 				}
 			}
-			if (managedValue.IsComplexType) {
+			var automaticlyStringify = AUTOMATICLY_STRINGIFY.Any(i => String.Equals(i.FullName, managedValue.TypeName));
+			if (managedValue.IsComplexType && !automaticlyStringify) {
 				foreach(var child in managedValue.GetFields()) {
 					if (childPropertiesCount <= _maxChildren) {
 						childPropertiesString.Append(this.ContextGetPropertyXml(child, depth-1, fullName+"."+child.Name));
@@ -853,6 +860,17 @@ namespace DotNetDbgp.ClientDebugger {
 			}
 			Func<String,String> e = (String i) => this.EscapeXml(i);
 			var myValue = e(val.GetStringValue(0, false));
+			if (automaticlyStringify) {
+				var managedThread =  _mdbgProcess.Threads.Active.Get<ManagedThread>();
+				try {
+					_mdbgProcess.TemporaryDefaultManagedRuntime.CorProcess.SetAllThreadsDebugState(CorDebugThreadState.THREAD_SUSPEND, managedThread.CorThread);
+					var eval = managedThread.CorThread.CreateEval();
+					var myValue2 = DoFunctionEval(GetFunction(managedValue.TypeName+".ToString"), new[] { managedValue.CorValue }, eval, managedThread).Item2;
+					myValue = e(myValue2.GetStringValue(0, false));
+				} finally {
+					managedThread.Runtime.CorProcess.SetAllThreadsDebugState(CorDebugThreadState.THREAD_RUN, managedThread.CorThread);
+				}
+			}
 			return String.Format(
 				"<property name=\"{0}\" fullname=\"{1}\" type=\"{2}\" classname=\"{2}\" constant=\"0\" children=\"{3}\" size=\"{4}\" encoding=\"none\" numchildren=\"{3}\">{5}{6}</property>",
 				e(val.Name), e(fullName), e(val.TypeName), childPropertiesCount, myValue.Length+childPropertiesString.Length, LimitLength(myValue, _maxData), childPropertiesString.ToString()
