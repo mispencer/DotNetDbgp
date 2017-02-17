@@ -249,6 +249,7 @@ namespace DotNetDbgp.ClientDebugger {
 				|| _mdbgProcess.StopReason is StepCompleteStopReason
 				|| _detaching;
 				if (validStop) {
+					Console.WriteLine("Breaking");
 					var outputMessage = this.ContinuationXml(_steppingCommand, _steppingTransId);
 					var realMessage = this.GenerateOutputMessage(outputMessage);
 					_socket.Send(Encoding.UTF8.GetBytes(realMessage));
