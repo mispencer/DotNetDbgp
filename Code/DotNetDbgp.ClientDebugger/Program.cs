@@ -29,7 +29,7 @@ namespace DotNetDbgp.ClientDebugger {
 				}
 
 				if (pid == null) {
-					pid = FindPidForAppPool("ASP.NET v4.0");
+					pid = FindPidForAppPool("DefaultAppPool");
 				}
 				if (pid == null) {
 					throw new Exception("Unknown pid");
