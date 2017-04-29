@@ -310,11 +310,24 @@ namespace DotNetDbgp.ClientDebugger {
 		private static WaitHandle StepImpl(MDbgProcess mdbgProcess, StepperType type, bool nativeStepping) {
 			//HACKHACKHACK
 			mdbgProcess.GetType().GetMethod("EnsureCanExecute", BindingFlags.NonPublic|BindingFlags.Instance, null, new[] { typeof(String) }, null).Invoke(mdbgProcess, new Object[] { "stepping" });
-			var frameData = mdbgProcess.Threads.Active.BottomFrame.GetPreferedFrameData(((IRuntime)mdbgProcess.Runtimes.NativeRuntime ?? mdbgProcess.Runtimes.ManagedRuntime));
-			var stepDesc = frameData.CreateStepperDescriptor(type, nativeStepping);
-			var managerStepDesc = stepDesc as ManagedStepperDescriptor;
-			if (managerStepDesc != null) managerStepDesc.IsJustMyCode = true;
-			stepDesc.Step();
+			try {
+				var frameData = mdbgProcess.Threads.Active.BottomFrame.GetPreferedFrameData(((IRuntime)mdbgProcess.Runtimes.NativeRuntime ?? mdbgProcess.Runtimes.ManagedRuntime));
+				var stepDesc = frameData.CreateStepperDescriptor(type, nativeStepping);
+				var managerStepDesc = stepDesc as ManagedStepperDescriptor;
+				if (managerStepDesc != null) managerStepDesc.IsJustMyCode = true;
+				stepDesc.Step();
+			} catch (Microsoft.Samples.Debugging.MdbgEngine.NoActiveInstanceException) {
+				try {
+					foreach(var thread in mdbgProcess.Threads) {
+						try {
+							System.Console.WriteLine(thread.Id);
+						} catch { System.Console.WriteLine("None"); }
+						try {
+								System.Console.WriteLine(thread.BottomFrame.Function.FullName);
+						} catch { System.Console.WriteLine("None"); }
+					}
+				} catch {}
+			}
 			//HACKHACKHACK
 			mdbgProcess.GetType().GetMethod("EnterRunningState", BindingFlags.NonPublic|BindingFlags.Instance, null, new Type[0], null).Invoke(mdbgProcess, new Object[0]);
 			return mdbgProcess.StopEvent;
